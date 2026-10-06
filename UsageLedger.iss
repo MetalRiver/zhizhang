@@ -1,17 +1,17 @@
-; 智账 · PathOrbit AI Ledger 0.11.0-rc.5 Inno Setup Script
+; 智账 · PathOrbit AI Ledger 0.11.0-rc.6 Inno Setup Script
 ; 安装到 %LOCALAPPDATA%\Programs\UsageLedger（不需要管理员权限）
 ; 卸载只删除程序文件，不删 %LOCALAPPDATA%\UsageLedger\（用户数据）
 
 [Setup]
 AppId={{A3F8B2C1-4D5E-6F70-8A9B-0C1D2E3F4A5B}
 AppName=智账
-AppVersion=0.11.0-rc.5
+AppVersion=0.11.0-rc.6
 AppPublisher=PathOrbit
 DefaultDirName={localappdata}\Programs\UsageLedger
 DefaultGroupName=智账
 DisableProgramGroupPage=yes
 OutputDir=installer
-OutputBaseFilename=ZhiZhang-0.11.0-rc.5-win-x64-setup
+OutputBaseFilename=ZhiZhang-0.11.0-rc.6-win-x64-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
