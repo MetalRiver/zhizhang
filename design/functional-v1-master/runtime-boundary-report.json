@@ -1,0 +1,38 @@
+{
+  "statement": "DESIGN REFERENCE ONLY / NOT RUNTIME",
+  "pass": "Settings Local Rebuild + Global Minor Polish",
+  "designStatus": "FINAL LOCK",
+  "runtimeModified": false,
+  "auditedFiles": 219,
+  "changedOutsideDesign": [],
+  "newGitEntriesOutsideDesign": [],
+  "trackedDiff": [],
+  "stagedDiff": [],
+  "branch": "r10-release-beta",
+  "gitStatus": [
+    "?? design/"
+  ],
+  "scope": "design/functional-v1-master/",
+  "rootFiles": 20,
+  "rootScreenshots": 10,
+  "darkArchiveFiles": 20,
+  "acceptanceChecks": 38,
+  "browserErrors": 0,
+  "captureErrors": 0,
+  "refreshedScreenshots": [
+    "06-settings.png",
+    "02-overview.png",
+    "03-project-detail.png",
+    "04-session-detail.png",
+    "05-explore.png",
+    "07-project-attribution.png",
+    "08-data-confidence.png",
+    "09-overview-1366.png",
+    "10-overview-1180.png"
+  ],
+  "retainedScreenshots": [
+    "01-first-run.png"
+  ],
+  "firstRunScreenshotUnchanged": true,
+  "evidence": "SHA256 against pre-pass baseline; tracked and staged diff empty; frozen fixture unchanged; seven Settings surfaces at four widths"
+}

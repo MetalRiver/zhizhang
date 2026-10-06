@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>智账</title>
+  <style>
+    :root { color-scheme: light; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+      font-size: 14px; color: #303536; background: #fff;
+      padding: 22px 24px 18px; user-select: none;
+    }
+    h1 { font-size: 16px; margin-bottom: 8px; }
+    p { color: #747a7c; line-height: 1.6; }
+    .choices { margin-top: 18px; display: flex; flex-direction: column; gap: 10px; }
+    button {
+      font: inherit; text-align: left; padding: 10px 14px;
+      border: 1px solid #e6e7e2; border-radius: 10px; background: #fff;
+      cursor: pointer;
+    }
+    button:hover { border-color: #9b783f; }
+    button.primary { background: #9b783f; border-color: #9b783f; color: #fff; }
+    button.primary:hover { background: #84632e; }
+    .remember { margin-top: 14px; display: flex; align-items: center; gap: 6px; color: #747a7c; }
+    .remember input { accent-color: #9b783f; }
+    .footnote { margin-top: 12px; font-size: 12px; color: #a0a6a4; }
+  </style>
+</head>
+<body>
+  <h1>关闭窗口后，你希望智账继续在后台运行吗？</h1>
+  <p>保持后台运行时，智账会留在系统托盘，账本更新不中断；你也可以随时从托盘退出。</p>
+  <div class="choices">
+    <button class="primary" id="btn-background">保持后台运行</button>
+    <button id="btn-exit">完全退出</button>
+  </div>
+  <label class="remember"><input type="checkbox" id="remember" />记住我的选择，以后不再询问</label>
+  <p class="footnote">之后可以在「设置 → 常用」中更改这一行为。</p>
+  <script src="close-ask.js"></script>
+</body>
+</html>

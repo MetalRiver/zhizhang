@@ -1,0 +1,106 @@
+# ============================================================
+# Usage Ledger — 运行态产物与本机隐私，一律不入库
+# 原则：入库的是「产品」，不入库的是「这台机器跑出来的东西」。
+# ============================================================
+
+# ---- 账本与运行状态（真实数据 / 每次运行重写）----
+usage.db
+usage.db.bak-v0
+usage.db.bak-*
+usage.db-journal
+usage.db-wal
+usage.db-shm
+auto.log
+auto.log.*
+run-state.json
+health.json
+discovery.json
+discovery-state.json
+generic-sources.json
+tests/_correctness_evidence_*.json
+tests/_round_*.json
+tests/_pricing_*.json
+tests/_frozen_*.json
+tests/_brand_*.json
+tests/_rc_*.json
+tests/_perf_*.json
+tests/_rc2_*.json
+tests/_rc2_gate_*.json
+resolved-sources.json
+usage.csv
+report.html
+usage-board.json
+web/usage-board.json
+replay-state.json
+
+# ---- 本机路径与个人配置（含真实盘符/目录，禁止公开）----
+sources.json
+auto-schedule.json
+
+# ---- 自动同步下来的价目缓存（可用 pricing-sync 重新取得，394KB 且会频繁变化）----
+pricing.auto.json
+
+# ---- Python 运行残渣 ----
+__pycache__/
+*.pyc
+
+# ---- 隔离虚拟环境（本地开发用，不入库）----
+.venv/
+
+# ---- 一阶段探针 / 临时产物 ----
+_p1d_tmp/
+_p1d_probe.html
+_p1d_inter.html
+_sandbox/
+*.tmp
+
+# ---- 基线核对清单（每台机器各自生成）----
+scripts/baseline-manifest.local.txt
+
+# ---- Round 7 运行态 ----
+usage-ledger-scan.lock
+server-state.json
+server.log
+server.log.*
+
+# ---- Round 8 定价备份 ----
+pricing.json.bak-r8
+pricing.json.bak-*
+
+# ---- 构建产物 ----
+dist/
+build/
+*.spec.bak
+
+# ---- R10-D Desktop Shell（构建产物不入库，spec/脚本入库）----
+src-tauri/target/
+src-tauri/binaries/
+src-tauri/gen/
+node_modules/
+
+# ---- V3-00 起的一次性探针 / 中间验证产物，禁止再入根目录 ----
+/_*
+/docs/verification/*.zip
+
+# ---- RC/Release 构建产物（本地发布物不入库）----
+release/
+
+# ---- RC.6 公开仓补充：密钥 / 私有档案 / 个人数据硬隔离 ----
+*.key
+*.pem
+*.pfx
+*.p12
+.env
+.env.*
+bootstrap.json
+desktop-state.json
+bootstrap*.json
+PathOrbit-Secrets/
+PathOrbitKeys/
+archives/
+**/usage-ledger-scan.lock
+server-state.json
+server.log*
+sources.json
+resolved-sources.json
+source-catalog.json.bak*

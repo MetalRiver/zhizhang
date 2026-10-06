@@ -1,0 +1,15 @@
+{
+  "name": "usage-ledger",
+  "version": "0.11.0-rc.2",
+  "private": true,
+  "description": "智账 · PathOrbit AI Ledger — local-first AI usage ledger (web UI + Tauri desktop shell)",
+  "scripts": {
+    "tauri": "tauri",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build",
+    "backend:sidecar": "pyinstaller UsageLedgerBackend.spec --noconfirm --distpath src-tauri/binaries --workpath build/backend-spec"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.0"
+  }
+}

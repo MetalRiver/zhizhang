@@ -1,0 +1,26 @@
+Usage Ledger · Functional V1 Release Candidate
+===============================================
+
+version          0.11.0-rc.5
+date             2026-10-04
+stage            智账 · PathOrbit AI Ledger — Release Candidate 5 (Internal Brand Asset Closure)
+
+组成部分基线
+------------
+core             ledger.py + autopilot.py（Python 单文件核心 + 标准库，仅 dsh 需 zstandard）
+                 账本 schema v3（PRAGMA user_version=3）：v1 重放血统三列 → v2
+                 project/session 注册表 + usage_event.project_key → v3 手工归因
+                 优先（project_key_manual / project_key_auto 留痕、
+                 session_registry.attribution_manual、project_registry.display_name_manual）
+board schema     Usage Board Schema v1（additive dedup/by_project；summary 增量字段）
+web ui           Functional V1 Light UI（web/v1/shell.html + app.css + app.js，
+                 源：design/functional-v1-master；一级 IA = 总览/探索/设置）
+desktop          Tauri v2 壳 + PyInstaller onedir sidecar
+                 owned backend 生命周期 = Windows Job Object（KILL_ON_JOB_CLOSE）
+
+数据口径（冻结，与正式审计一致）
+--------------------------------
+raw 42,803 ＝ replay 5,118 ＋ effective 37,685（关系式为准，自然增长持续）
+activity 773（Activity ≠ Token）
+默认口径 EFFECTIVE，raw 永久审计保留
+估算成本 = 公开 API 等价估算（CNY/USD 分列，不是实际账单）

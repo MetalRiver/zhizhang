@@ -1,0 +1,11 @@
+{
+  "_note": "复制为 sources.json 后按需修改。显式指定的路径是唯一事实源：配了就只读那个路径，不再回退任何兜底位置。dsh 可以给 home 目录，也可以直接给 sessions 目录。_search_roots 提供额外的候选根目录（仅对 dsh 生效）。",
+  "_fields": {
+    "dsh": "dsh home 目录或 sessions 目录（桌面打包版通常不在 ~/.dsh）",
+    "_search_roots": "可选，数组；在这些根目录下探测 data/dsh-home/sessions 与 dsh-home/sessions"
+  },
+  "_example": {
+    "dsh": "D:/path/to/dsh-home",
+    "_search_roots": ["D:/path/to/apps"]
+  }
+}

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-boot-info"
+description = "Enables the get_boot_info command without any pre-configured scope."
+commands.allow = ["get_boot_info"]
+
+[[permission]]
+identifier = "deny-get-boot-info"
+description = "Denies the get_boot_info command without any pre-configured scope."
+commands.deny = ["get_boot_info"]

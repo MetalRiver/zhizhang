@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>智账</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { width: 100%; height: 100%; overflow: hidden; }
+    body {
+      background: #04161d;
+      display: grid; place-content: center; justify-items: center;
+      font-family: "Microsoft YaHei", "Noto Sans CJK SC", Inter, system-ui, sans-serif;
+      color: #aab9b5;
+      user-select: none;
+    }
+    .sig {
+      width: 64px; height: 64px; object-fit: contain;
+      filter: drop-shadow(0 0 18px rgba(216,170,97,.28));
+    }
+    .spin { animation: turn 2.6s ease-in-out infinite; }
+    @keyframes turn { 50% { transform: rotate(225deg); } 100% { transform: rotate(225deg); } }
+    h1 {
+      margin-top: 26px; color: #f2d39b;
+      font: 600 22px/1 "STSong", "Noto Serif CJK SC", serif;
+      letter-spacing: .14em;
+    }
+    small.en { margin-top: 9px; color: #6f8a85; font-size: 10px; letter-spacing: .3em; }
+    .status { margin-top: 30px; color: #8ba19c; font-size: 12.5px; letter-spacing: .06em; min-height: 18px; }
+    .status .dot {
+      display: inline-block; width: 6px; height: 6px; margin-right: 8px;
+      border-radius: 50%; background: #57d6a0; vertical-align: 1px;
+      box-shadow: 0 0 8px rgba(87,214,160,.5);
+      animation: pulse 1.2s ease-in-out infinite;
+    }
+    .status.err .dot { background: #e0a94f; box-shadow: 0 0 8px rgba(224,169,79,.5); animation: none; }
+    @keyframes pulse { 50% { opacity: .35; } }
+    .bar {
+      margin-top: 16px; width: 260px; height: 2px;
+      background: rgba(216,170,97,.14); position: relative; overflow: hidden;
+      border-radius: 2px;
+    }
+    .bar i {
+      position: absolute; left: -40%; top: 0; width: 40%; height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(242,211,155,.75), transparent);
+      animation: sweep 1.4s linear infinite;
+    }
+    .bar.done i { animation: none; opacity: 0; }
+    @keyframes sweep { to { left: 100%; } }
+    .errcard {
+      display: none; margin-top: 26px; padding: 18px 22px;
+      border: 1px solid rgba(224,169,79,.42); border-radius: 6px;
+      background: linear-gradient(160deg, rgba(58,44,22,.32), rgba(10,14,18,.6));
+      text-align: center;
+    }
+    .errcard.show { display: block; }
+    .errcard p.tip { color: #eec1a0; font-size: 13px; letter-spacing: .08em; }
+    .errcard p.sub { color: #9a8b80; font-size: 11px; margin-top: 8px; line-height: 1.7; }
+    .btns { display: flex; gap: 10px; justify-content: center; margin-top: 16px; }
+    .btns button {
+      appearance: none; cursor: pointer;
+      padding: 8px 18px; font-size: 12px; letter-spacing: .08em;
+      border: 1px solid rgba(216,170,97,.4); border-radius: 5px;
+      background: linear-gradient(180deg, rgba(216,170,97,.12), rgba(71,53,30,.08));
+      color: #f2d39b;
+      transition: border-color .15s ease, background .15s ease;
+    }
+    .btns button:hover { border-color: rgba(240,201,120,.8); background: rgba(216,170,97,.14); }
+    footer { position: fixed; bottom: 18px; color: #526e6d; font-size: 9px; letter-spacing: .26em; }
+  </style>
+</head>
+<body>
+  <img class="sig spin" id="sig" src="zhizhang-128.png" alt="智账">
+  <h1>智账</h1>
+  <small class="en">PATHORBIT AI LEDGER</small>
+  <div class="status" id="status"><span class="dot"></span><span id="statusText">正在启动本地服务…</span></div>
+  <div class="bar" id="bar"><i></i></div>
+
+  <div class="errcard" id="errcard">
+    <p class="tip">智账 本地服务启动失败</p>
+    <p class="sub" id="errDetail">本地核心未能在超时内就绪（127.0.0.1:8787）。<br />数据与日志位于 %LOCALAPPDATA%\UsageLedger\，账本不受影响。</p>
+    <div class="btns">
+      <button id="btnRetry">重 试</button>
+      <button id="btnLogs">打开数据目录</button>
+      <button id="btnExit">退 出</button>
+    </div>
+  </div>
+
+  <footer>LOCAL · PRIVATE · AUDITABLE</footer>
+  <script src="app.js"></script>
+</body>
+</html>

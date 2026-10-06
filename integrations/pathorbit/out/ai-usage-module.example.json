@@ -1,0 +1,24 @@
+{
+  "module_schema": 1,
+  "title": "AI 使用",
+  "subtitle": "本地 AI 用量账本",
+  "generated_at": "2026-01-01T00:00:00",
+  "window_days": 30,
+  "range": [
+    "2025-12-02",
+    "2026-01-01"
+  ],
+  "kpi": {
+    "tokens": 12345678,
+    "cache_read_tokens": 2345678,
+    "requests": 4321,
+    "cost_usd": 12.34,
+    "cost_configured": true,
+    "unpriced_models": 0
+  },
+  "coverage": {
+    "token_visible": 3,
+    "note": "synthetic example"
+  },
+  "_comment": "Synthetic example. Replace with output generated from your own usage-board.json."
+}

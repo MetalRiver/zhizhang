@@ -1,0 +1,7 @@
+# Usage Ledger Core — 唯一的第三方依赖
+#
+# 仅解析 dsh 会话（session.jsonl.zstd）需要；其余功能纯标准库。
+# 安装方式（隔离环境，禁止全局安装）：
+#   python -m venv .venv
+#   .venv/Scripts/python -m pip install -r requirements-core.txt
+zstandard==0.25.0

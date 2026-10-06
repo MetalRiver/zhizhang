@@ -1,0 +1,229 @@
+{
+  "scope": "Settings Local Rebuild + Global Minor Polish; offline design fixtures only, not Runtime tests",
+  "checks": [
+    {
+      "name": "8 页面布局 / 1920×1080",
+      "status": "PASS",
+      "evidence": "无页面或内容横向截断；详情固定操作可见；可信度入口完整"
+    },
+    {
+      "name": "8 页面布局 / 1440×900",
+      "status": "PASS",
+      "evidence": "无页面或内容横向截断；详情固定操作可见；可信度入口完整"
+    },
+    {
+      "name": "8 页面布局 / 1366×768",
+      "status": "PASS",
+      "evidence": "无页面或内容横向截断；详情固定操作可见；可信度入口完整"
+    },
+    {
+      "name": "8 页面布局 / 1180×720",
+      "status": "PASS",
+      "evidence": "无页面或内容横向截断；详情固定操作可见；可信度入口完整"
+    },
+    {
+      "name": "First Run 闭环",
+      "status": "PASS",
+      "evidence": "欢迎 → 发现 → 首次扫描 → 完成 → 总览"
+    },
+    {
+      "name": "活动与 Token 隔离",
+      "status": "PASS",
+      "evidence": "112 条活动；Token 与成本不可用"
+    },
+    {
+      "name": "时间 / 项目 / 客户端 / 模型筛选",
+      "status": "PASS",
+      "evidence": "摘要、项目账单、趋势及模型同步过滤"
+    },
+    {
+      "name": "Project → Session → Event",
+      "status": "PASS",
+      "evidence": "项目最耗会话首项 → 会话详情 → 探索事件 → 来源与精确值"
+    },
+    {
+      "name": "有效 / 原始 / 回放审计",
+      "status": "PASS",
+      "evidence": "16 有效 + 14 回放 = 30 原始；原始仅在高级审计出现"
+    },
+    {
+      "name": "Alias 稳定身份",
+      "status": "PASS",
+      "evidence": "改显示名，project_key 保持不变"
+    },
+    {
+      "name": "待归项目 → 指定项目",
+      "status": "PASS",
+      "evidence": "选择 → 目标项目 → 预览 → 确认；全局 Token 不变"
+    },
+    {
+      "name": "合并不重复计量",
+      "status": "PASS",
+      "evidence": "总 Token、会话数保持；项目数量减少；原始来源身份保留"
+    },
+    {
+      "name": "可信度解释",
+      "status": "PASS",
+      "evidence": "来源能力、定价分母、历史边界、重复回放与技术口径完整"
+    },
+    {
+      "name": "8 个边界状态",
+      "status": "PASS",
+      "evidence": "空记录、扫描错误、部分扫描、账本不可用、未定价、仅活动、未发现来源、历史缺口"
+    },
+    {
+      "name": "冻结数据语义",
+      "status": "PASS",
+      "evidence": {
+        "totalConsistent": true,
+        "activityNull": true,
+        "currencyKeys": [
+          "CNY",
+          "USD"
+        ],
+        "costNull": true,
+        "originalIdentity": true
+      }
+    },
+    {
+      "name": "项目技术信息逐层展开",
+      "status": "PASS",
+      "evidence": "默认会话与工具优先；用量组成、模型分布、原识别身份均可追溯"
+    },
+    {
+      "name": "会话技术信息保留",
+      "status": "PASS",
+      "evidence": "输入、输出、缓存与助手、首尾时间、来源身份完整"
+    },
+    {
+      "name": "探索轻量默认 + 完整审计",
+      "status": "PASS",
+      "evidence": "5 列默认记录，逐条展开精确值与原始字段；RAW/REPLAY 在高级层保留"
+    },
+    {
+      "name": "估算语义清楚",
+      "status": "PASS",
+      "evidence": "成本说明可鼠标与键盘打开，明确公开 API 等价估算与币种不换汇"
+    },
+    {
+      "name": "设置工程信息下沉",
+      "status": "PASS",
+      "evidence": "默认常用；Schema、Runtime、Build ID、SQLite 在高级展开中"
+    },
+    {
+      "name": "状态有图标、解释与下一步",
+      "status": "PASS",
+      "evidence": "Loading、Scanning、Success、Unknown、Unassigned、Disabled 均可明确继续；加上既有 Empty/No source/Partial/Error/No pricing"
+    },
+    {
+      "name": "锁定结构与用量守恒",
+      "status": "PASS",
+      "evidence": {
+        "nav": [
+          "总览",
+          "探索",
+          "设置"
+        ],
+        "total": 29252192,
+        "currencies": {
+          "CNY": 77.07720000000009,
+          "USD": 35.7458
+        },
+        "mode": "effective"
+      }
+    },
+    {
+      "name": "普通界面不暴露 project_key",
+      "status": "PASS",
+      "evidence": "高级信息可展开，不删除项目稳定身份"
+    },
+    {
+      "name": "暗色归档与浅色数据一致",
+      "status": "PASS",
+      "evidence": "原记录、会话、项目稳定身份与默认聚合逐字段相同，仅调整可读名称与呈现"
+    },
+    {
+      "name": "11 类状态逐项检查",
+      "status": "PASS",
+      "evidence": [
+        "loading",
+        "scanning",
+        "success",
+        "empty",
+        "no-sources",
+        "partial-scan",
+        "scan-error",
+        "no-pricing",
+        "unknown",
+        "unassigned",
+        "disabled"
+      ]
+    },
+    {
+      "name": "成本说明键盘可达",
+      "status": "PASS",
+      "evidence": "信息按钮获得焦点后 Enter 展开说明"
+    },
+    {
+      "name": "1180 探索结构",
+      "status": "PASS",
+      "evidence": "顶部项目选择，下方会话与记录两列，保留当前路径"
+    },
+    {
+      "name": "设置 7 分组 / 1920×1080",
+      "status": "PASS",
+      "evidence": "单个独立内容面；无巨型卡片；轻量导航；描述≥13px；最多一个主动作；最小窗口内容宽度≥780px"
+    },
+    {
+      "name": "设置 7 分组 / 1440×900",
+      "status": "PASS",
+      "evidence": "单个独立内容面；无巨型卡片；轻量导航；描述≥13px；最多一个主动作；最小窗口内容宽度≥780px"
+    },
+    {
+      "name": "设置 7 分组 / 1366×768",
+      "status": "PASS",
+      "evidence": "单个独立内容面；无巨型卡片；轻量导航；描述≥13px；最多一个主动作；最小窗口内容宽度≥780px"
+    },
+    {
+      "name": "设置 7 分组 / 1180×720",
+      "status": "PASS",
+      "evidence": "单个独立内容面；无巨型卡片；轻量导航；描述≥13px；最多一个主动作；最小窗口内容宽度≥780px"
+    },
+    {
+      "name": "隐私 → 高级数据说明",
+      "status": "PASS",
+      "evidence": "打开对应高级折叠，不跳到无关配置"
+    },
+    {
+      "name": "设置项目整理的三个具体动作",
+      "status": "PASS",
+      "evidence": "名称、待整理会话、合并均进入既有流程，不编造重复项目发现能力"
+    },
+    {
+      "name": "设置整理数量与操作一致",
+      "status": "PASS",
+      "evidence": "整理全账本的6场待整理会话，不受首页项目筛选误裁剪"
+    },
+    {
+      "name": "更新账本结果与防并发",
+      "status": "PASS",
+      "evidence": "成功、部分成功、失败保留准确结果；更新中按钮禁用，历史数据不变"
+    },
+    {
+      "name": "数据目录仍为设计演示",
+      "status": "PASS",
+      "evidence": "只显示正式桌面接口说明，不操作本机目录"
+    },
+    {
+      "name": "完整性管理入口定位准确",
+      "status": "PASS",
+      "evidence": "进入 AI 工具页，完整性页面内容与能力未重构"
+    },
+    {
+      "name": "浏览器脚本错误",
+      "status": "PASS",
+      "evidence": 0
+    }
+  ],
+  "errors": []
+}

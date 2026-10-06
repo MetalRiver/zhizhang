@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- R10-C art asset · brand app icon (master) · 丝路智算中枢 emblem -->
+  <defs>
+    <radialGradient id="glow" cx="0.5" cy="0.36" r="0.75">
+      <stop offset="0" stop-color="#0d343c"/>
+      <stop offset="0.55" stop-color="#072229"/>
+      <stop offset="1" stop-color="#04161d"/>
+    </radialGradient>
+    <linearGradient id="goldface" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f2d39b"/>
+      <stop offset="1" stop-color="#d8aa61"/>
+    </linearGradient>
+    <radialGradient id="core" cx="0.5" cy="0.4" r="0.8">
+      <stop offset="0" stop-color="#2e7d74"/>
+      <stop offset="1" stop-color="#0a2c31"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="104" fill="url(#glow)"/>
+  <rect x="10" y="10" width="492" height="492" rx="96" fill="none" stroke="#d8aa61" stroke-opacity="0.55" stroke-width="3"/>
+  <rect x="24" y="24" width="464" height="464" rx="86" fill="none" stroke="#d8aa61" stroke-opacity="0.16" stroke-width="1.5"/>
+
+  <!-- corner ornaments -->
+  <g stroke="#f2d39b" stroke-opacity="0.65" stroke-width="3" fill="none">
+    <path d="M52 96 v-34 a10 10 0 0 1 10 -10 h34"/>
+    <path d="M416 52 h34 a10 10 0 0 1 10 10 v34"/>
+    <path d="M460 416 v34 a10 10 0 0 1 -10 10 h-34"/>
+    <path d="M96 460 h-34 a10 10 0 0 1 -10 -10 v-34"/>
+  </g>
+
+  <!-- diamond emblem -->
+  <g transform="rotate(45 256 256)">
+    <rect x="166" y="166" width="180" height="180" rx="18" fill="url(#core)" stroke="url(#goldface)" stroke-width="5"/>
+    <rect x="186" y="186" width="140" height="140" rx="12" fill="none" stroke="#d8aa61" stroke-opacity="0.5" stroke-width="2"/>
+  </g>
+  <circle cx="256" cy="256" r="64" fill="none" stroke="#d8aa61" stroke-opacity="0.55" stroke-width="2"/>
+  <circle cx="256" cy="256" r="80" fill="none" stroke="#d8aa61" stroke-opacity="0.22" stroke-width="1.5" stroke-dasharray="3 7"/>
+  <circle cx="256" cy="256" r="13" fill="none" stroke="#d8aa61" stroke-opacity="0.4" stroke-width="1.5"/>
+
+  <!-- center glyph -->
+  <text x="256" y="290" text-anchor="middle" font-family="Georgia,'Times New Roman',serif" font-size="96" font-weight="700" fill="url(#goldface)">&#8734;</text>
+
+  <!-- star dust -->
+  <g fill="#e8e4d2">
+    <circle cx="140" cy="120" r="2.5" fill-opacity="0.5"/>
+    <circle cx="392" cy="140" r="2" fill-opacity="0.4"/>
+    <circle cx="120" cy="380" r="2" fill-opacity="0.35"/>
+    <circle cx="400" cy="392" r="2.4" fill-opacity="0.45"/>
+    <circle cx="256" cy="112" r="1.8" fill-opacity="0.35"/>
+  </g>
+</svg>

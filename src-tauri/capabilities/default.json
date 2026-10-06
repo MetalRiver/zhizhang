@@ -1,0 +1,20 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "智账桌面壳最小权限：加载页事件与内置命令，无 shell/fs 全权",
+  "windows": [
+    "main",
+    "close-ask"
+  ],
+  "local": true,
+  "permissions": [
+    "allow-get-boot-info",
+    "allow-get-desktop-state",
+    "allow-open-data-root",
+    "allow-resolve-close-choice",
+    "allow-retry-recovery",
+    "core:default",
+    "core:event:default",
+    "core:window:default"
+  ]
+}

@@ -1,0 +1,170 @@
+{
+  "$comment": "智账 · PathOrbit AI Ledger · Source Catalog V1.1。Universal Local AI Discovery 的规则事实源：每个已知工具一条规则；通用 schema 契约与扫描限额也在本文件。禁止写入任何用户机器的绝对路径——所有路径一律用 home 相对或环境变量 token（~、%APPDATA%、%LOCALAPPDATA%），由 discovery 引擎展开。产品边界（V1.1 冻结）：DISCOVERY != INGESTION——generic 来源只有由 catalog 规则（adapter 为 generic-* 的条目即锚定规则）、installed app 或 registry 身份锚定时才允许自动入账；仅靠目录 basename 的 unanchored generic 只发现不入账。",
+  "schema_version": 1,
+  "catalog_version": 1,
+  "updated": "2026-10-03",
+  "platform": "win32",
+
+  "limits": {
+    "home_dir_scan_depth": 1,
+    "data_walk_depth": 3,
+    "max_files_per_root": 400,
+    "max_candidate_roots": 200,
+    "max_probe_bytes": 262144,
+    "max_sample_lines": 5,
+    "probe_timeout_seconds": 20,
+    "max_sqlite_open": 24
+  },
+
+  "generic": {
+    "identity": {
+      "description": "Generic 来源的稳定事件身份（canonicalization 契约）。PHYSICAL SOURCE != LOGICAL EVENT：VACUUM / 表重建 / 文件改名或移动 / 备份副本 / 重新发现 / 重新扫描，同一真实 Usage 的身份必须不变。",
+      "priority": "provider 稳定 id（event_id / request_id / message_id / usage_id；JSONL 额外接受裸 id，SQLite 不接受裸 id —— 那是 rowid 别名）优先；不存在时用 canonical content fingerprint",
+      "canonical_fingerprint": "SHA256(canonical JSON)[:32]，固定键序：schema 版本、身份种类(pid|content)、归一化 tool identity、归一化 session、provider id、归一化时间戳(epoch ms)、归一化 model、token 五元组 [input, output, reasoning, cache_read, cache_write]",
+      "normalization": {
+        "string": "NFKC + strip；NULL/缺失 → ''",
+        "timestamp": "一律 epoch ms（秒 ×1000；ISO 字符串解析后转 ms）",
+        "numeric": "一律 int（整值 float 接受；负数/非数拒绝该记录）",
+        "model": "NFKC + strip",
+        "session": "记录内 session/conversation 字段；缺失 → '' 常量桶（绝不回退文件名）"
+      },
+      "forbidden_inputs": ["绝对路径", "rowid", "文件名", "读取顺序", "mtime"],
+      "insufficient_identity": "缺时间字段（或时间不可解析）→ 该来源 DETECTED_UNSUPPORTED，reason='缺少足够稳定的事件身份'，绝不自动入账"
+    },
+    "jsonl_openai_usage": {
+      "adapter": "generic-jsonl-openai-usage",
+      "description": "OpenAI 风格逐行 usage 记录。契约（每条采样记录都必须满足，否则整份文件降级，绝不猜字段）：",
+      "required": {
+        "model": "非空字符串",
+        "prompt_tokens": "非负整数",
+        "completion_tokens": "非负整数",
+        "timestamp": "timestamp / ts / created_at / created / time 之一（epoch 秒/毫秒或 ISO 字符串）"
+      },
+      "session_identity": "session_id / conversation_id / session / thread_id 之一；全部缺失时回退为按文件维度（文件名做会话身份）",
+      "cache_semantics": {
+        "openai_confirmed": "缓存命中只出现在 prompt_tokens_details.cached_tokens（OpenAI 文档语义：prompt_tokens 含缓存）→ input = max(prompt_tokens - cached_tokens, 0)，cache_read = cached_tokens",
+        "ambiguous_flat_cache": "顶层 cached_tokens 等扁平缓存字段 → 语义无法确认 → 整个来源降级 DETECTED_UNSUPPORTED，绝不猜测"
+      }
+    },
+    "sqlite_openai_usage": {
+      "adapter": "generic-sqlite-openai-usage",
+      "description": "单表、列集精确匹配的 OpenAI 风格 SQLite 用量库。列集必须包含：",
+      "required_columns": ["model", "prompt_tokens", "completion_tokens"],
+      "timestamp_columns": ["ts_ms", "created_at", "timestamp", "ts", "started_at"],
+      "session_columns": ["session_id", "conversation_id", "session"],
+      "cache_semantics": {
+        "allowed_cache_columns": ["cache_read_input_tokens", "cache_creation_input_tokens", "cached_tokens_in_prompt"],
+        "ambiguous_cache_columns": ["cached_tokens", "cache_read", "cache_write"],
+        "rule": "只接受 allowed 集合里的缓存列（与既有 zcode 口径同语义：input 不含 cache）；出现 ambiguous 缓存列 → DETECTED_UNSUPPORTED"
+      }
+    },
+    "activity_like": {
+      "adapter": null,
+      "description": "有会话/消息结构但无 token 字段：确认是 AI 数据，能力 ACTIVITY，但不自动入账（V1.1 只发现不解析）→ DETECTED_UNSUPPORTED",
+      "structure_hints": ["messages", "conversation", "session", "history", "turns"]
+    },
+    "name_hints": ["ai", "llm", "gpt", "copilot", "chat", "agent", "assistant", "prompt", "claude", "deepseek", "qwen", "gemini", "cursor", "trae", "codebuddy", "comate"]
+  },
+
+  "tools": [
+    {
+      "id": "zcode",
+      "display_name": "ZCode",
+      "process_names": ["zcode"],
+      "install_hints": [".zcode"],
+      "data_path_hints": ["~/.zcode/cli/db/db.sqlite"],
+      "file_patterns": ["db.sqlite"],
+      "fingerprints": {"kind": "sqlite", "tables": {"model_usage": ["session_id", "model_id", "input_tokens", "output_tokens"], "session": ["id", "directory"]}},
+      "capability": "TOKEN",
+      "adapter": "zcode",
+      "confidence_basis": "path+schema",
+      "platform": "win32",
+      "version": 1
+    },
+    {
+      "id": "dsh",
+      "display_name": "dsh (DeepSeek Harness)",
+      "process_names": ["dsh"],
+      "install_hints": [".dsh", "dsh-home"],
+      "data_path_hints": ["~/.dsh/sessions"],
+      "file_patterns": ["session.jsonl.zstd", "session.jsonl"],
+      "fingerprints": {"kind": "zstd-jsonl", "name": "session.jsonl.zstd"},
+      "capability": "TOKEN",
+      "adapter": "dsh",
+      "confidence_basis": "path+layout",
+      "platform": "win32",
+      "version": 1
+    },
+    {
+      "id": "workbuddy",
+      "display_name": "WorkBuddy",
+      "process_names": ["workbuddy"],
+      "install_hints": [".workbuddy", ".workbuddy-ai"],
+      "data_path_hints": ["~/.workbuddy/projects", "~/.workbuddy-ai/projects"],
+      "file_patterns": ["*.jsonl"],
+      "fingerprints": {"kind": "jsonl", "keys": ["rawUsage.prompt_tokens", "rawUsage.completion_tokens"]},
+      "capability": "TOKEN",
+      "adapter": "workbuddy",
+      "confidence_basis": "path+schema",
+      "platform": "win32",
+      "version": 1
+    },
+    {
+      "id": "catpaw",
+      "display_name": "CatPaw",
+      "process_names": ["catpaw", "catpaw-moon"],
+      "install_hints": [".catpaw", "catpaw-moon", ".meituan-catpaw"],
+      "data_path_hints": ["~/.catpaw/projects", "%APPDATA%/catpaw-moon", "~/.meituan-catpaw"],
+      "file_patterns": ["*.jsonl", "*.db"],
+      "fingerprints": {"kind": "jsonl", "keys": ["messageId", "conversationId", "type"]},
+      "capability": "ACTIVITY",
+      "adapter": "catpaw",
+      "confidence_basis": "path+schema",
+      "platform": "win32",
+      "version": 1
+    },
+    {
+      "id": "traecn",
+      "display_name": "Trae CN",
+      "process_names": ["trae-cn", "Trae CN"],
+      "install_hints": [".trae-cn"],
+      "data_path_hints": ["~/.trae-cn/memory/projects"],
+      "file_patterns": ["*.jsonl"],
+      "fingerprints": {"kind": "jsonl", "keys": ["memory", "project"]},
+      "capability": "ACTIVITY",
+      "adapter": "traecn",
+      "confidence_basis": "path",
+      "platform": "win32",
+      "version": 1
+    },
+    {
+      "id": "codex",
+      "display_name": "Codex",
+      "process_names": ["codex", "Codex", "codex-command-runner"],
+      "install_hints": [".codex"],
+      "install_aliases": ["OpenAI Codex", "Codex"],
+      "data_path_hints": ["~/.codex/sessions", "~/.codex/archived_sessions"],
+      "file_patterns": ["rollout-*.jsonl"],
+      "fingerprints": {"kind": "jsonl", "keys": ["type", "ordinal", "timestamp", "payload.session_id"]},
+      "capability": "TOKEN",
+      "adapter": "codex",
+      "confidence_basis": "path+schema",
+      "platform": "win32",
+      "version": 1
+    },
+    {
+      "id": "traecn_agentdb",
+      "display_name": "Trae CN · ai-agent 数据库",
+      "process_names": ["trae-cn", "Trae CN"],
+      "install_hints": ["Trae CN", "TRAE SOLO CN"],
+      "data_path_hints": ["%APPDATA%/Trae CN/ModularData/ai-agent/database.db", "%APPDATA%/TRAE SOLO CN/ModularData/ai-agent/database.db"],
+      "file_patterns": ["database.db"],
+      "fingerprints": {"kind": "opaque", "reason": "加密存储：SQLite 头部不可解析（file is not a database），本地无法读取用量"},
+      "capability": "UNKNOWN",
+      "adapter": null,
+      "confidence_basis": "path",
+      "platform": "win32",
+      "version": 1
+    }
+  ]
+}

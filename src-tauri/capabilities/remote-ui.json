@@ -1,0 +1,31 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "remote-ui",
+  "description": "智账后端 UI（127.0.0.1:8787）最小 IPC 桥：桌面生命周期命令与事件监听（RC.3 First Run / 设置开关 / What's New）",
+  "windows": [
+    "main"
+  ],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:8787",
+      "http://localhost:8787"
+    ]
+  },
+  "permissions": [
+    "core:event:default",
+    "allow-open-data-root",
+    "allow-resolve-close-choice",
+    "allow-get-desktop-state",
+    "allow-set-close-behavior",
+    "allow-set-autostart",
+    "allow-get-boot-info",
+    "allow-retry-recovery",
+    "allow-complete-first-run",
+    "allow-pick-folder",
+    "allow-set-data-root",
+    "allow-migrate-data-root-plan",
+    "allow-migrate-data-root-execute",
+    "allow-check-for-update",
+    "allow-download-and-install-update"
+  ]
+}

@@ -1,0 +1,122 @@
+{
+  "pass": "Settings Local Rebuild + Global Minor Polish",
+  "refreshed": [
+    "06-settings.png",
+    "02-overview.png",
+    "03-project-detail.png",
+    "04-session-detail.png",
+    "05-explore.png",
+    "07-project-attribution.png",
+    "08-data-confidence.png",
+    "09-overview-1366.png",
+    "10-overview-1180.png"
+  ],
+  "retained": [
+    "01-first-run.png"
+  ],
+  "renderer": "Microsoft Edge · isolated headless artifact rendering",
+  "deviceScaleFactor": 1,
+  "errors": [],
+  "results": [
+    {
+      "name": "01-first-run.png",
+      "view": "first-run",
+      "width": 1440,
+      "height": 900,
+      "horizontalOverflow": false,
+      "mainWidth": 1425,
+      "dialogs": 0,
+      "buttons": 1
+    },
+    {
+      "name": "02-overview.png",
+      "view": "overview",
+      "width": 1920,
+      "height": 1080,
+      "horizontalOverflow": false,
+      "mainWidth": 1701,
+      "dialogs": 0,
+      "buttons": 16
+    },
+    {
+      "name": "03-project-detail.png",
+      "view": "project",
+      "width": 1440,
+      "height": 900,
+      "horizontalOverflow": false,
+      "mainWidth": 1221,
+      "dialogs": 1,
+      "buttons": 27
+    },
+    {
+      "name": "04-session-detail.png",
+      "view": "session",
+      "width": 1440,
+      "height": 900,
+      "horizontalOverflow": false,
+      "mainWidth": 1221,
+      "dialogs": 1,
+      "buttons": 26
+    },
+    {
+      "name": "05-explore.png",
+      "view": "explore",
+      "width": 1920,
+      "height": 1080,
+      "horizontalOverflow": false,
+      "mainWidth": 1701,
+      "dialogs": 0,
+      "buttons": 25
+    },
+    {
+      "name": "06-settings.png",
+      "view": "settings",
+      "width": 1440,
+      "height": 900,
+      "horizontalOverflow": false,
+      "mainWidth": 1221,
+      "dialogs": 0,
+      "buttons": 13
+    },
+    {
+      "name": "07-project-attribution.png",
+      "view": "attribution",
+      "width": 1440,
+      "height": 900,
+      "horizontalOverflow": false,
+      "mainWidth": 1221,
+      "dialogs": 1,
+      "buttons": 22
+    },
+    {
+      "name": "08-data-confidence.png",
+      "view": "confidence",
+      "width": 1440,
+      "height": 900,
+      "horizontalOverflow": false,
+      "mainWidth": 1221,
+      "dialogs": 1,
+      "buttons": 19
+    },
+    {
+      "name": "09-overview-1366.png",
+      "view": "overview",
+      "width": 1366,
+      "height": 768,
+      "horizontalOverflow": false,
+      "mainWidth": 1171,
+      "dialogs": 0,
+      "buttons": 16
+    },
+    {
+      "name": "10-overview-1180.png",
+      "view": "overview",
+      "width": 1180,
+      "height": 720,
+      "horizontalOverflow": false,
+      "mainWidth": 999,
+      "dialogs": 0,
+      "buttons": 16
+    }
+  ]
+}

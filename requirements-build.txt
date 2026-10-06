@@ -1,0 +1,4 @@
+# Usage Ledger Build dependencies（PyInstaller 打包用，非运行时依赖）
+# 安装：.venv/Scripts/python -m pip install -r requirements-build.txt
+
+pyinstaller==6.22.3

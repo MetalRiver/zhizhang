@@ -1,0 +1,7 @@
+# 行尾策略：默认 auto（跨平台协作），但哈希钉死的基线文件必须逐字节稳定。
+* text=auto
+
+# 截图等二进制资产按二进制处理。
+web/assets/art/brand/** binary
+*.png binary
+*.webp binary
