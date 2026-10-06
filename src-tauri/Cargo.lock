@@ -4541,7 +4541,7 @@ dependencies = [
 
 [[package]]
 name = "usage-ledger-desktop"
-version = "0.11.0-rc.5"
+version = "0.11.0-rc.6"
 dependencies = [
  "serde",
  "serde_json",
