@@ -34,6 +34,16 @@ pub fn legacy_default_root() -> PathBuf {
 }
 
 pub fn control_dir() -> PathBuf {
+    // RC.7-r7 debug test mode：USAGE_LEDGER_HOME + debug → 控制目录指向测试树
+    // （不读/不写宿主真实 bootstrap.json 与 desktop-state.json）。
+    // 仅 debug 构建生效；release 行为不变。
+    if cfg!(debug_assertions) {
+        if let Ok(test_root) = std::env::var("USAGE_LEDGER_HOME") {
+            if !test_root.is_empty() {
+                return PathBuf::from(&test_root).join("control");
+            }
+        }
+    }
     let base = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| {

@@ -27,8 +27,10 @@ if _FROZEN:
         os.path.join(_APPDATA, 'UsageLedger')
 else:
     # 开发模式：repo root = 脚本所在目录
+    # RC.7-r7：dev 模式也容许 USAGE_LEDGER_HOME 覆盖（与 ledger.py 同步），
+    # 使本地桌面调试可指向独立合成目录。
     APP_ROOT = os.path.dirname(os.path.abspath(__file__))
-    DATA_ROOT = APP_ROOT
+    DATA_ROOT = os.environ.get('USAGE_LEDGER_HOME') or APP_ROOT
 
 
 def ensure_data_root():

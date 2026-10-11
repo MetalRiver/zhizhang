@@ -261,6 +261,179 @@ class MigrationEngine(unittest.TestCase):
             serve.SCAN_LOCK.release()
         self.assertFalse(r.get('ok'))
 
+    # ---- RC.6 迁移安全专项：非空目录必须拒绝，绝不覆盖已有文件 ----
+
+    @staticmethod
+    def _hash_of(path):
+        import hashlib
+        with open(path, 'rb') as f:
+            return hashlib.sha256(f.read()).hexdigest()
+
+    def _make_nonempty_target(self):
+        """目标带 sources.json / pricing.json / 零字节 usage.db（无有效账本）。"""
+        os.makedirs(self.dst)
+        with open(os.path.join(self.dst, 'sources.json'), 'w', encoding='utf-8') as f:
+            f.write('{"user-data": true}')
+        with open(os.path.join(self.dst, 'pricing.json'), 'w', encoding='utf-8') as f:
+            f.write('{"keepme": 1}')
+        open(os.path.join(self.dst, 'usage.db'), 'wb').close()   # 0 字节
+
+    def test_plan_flags_nonempty_without_ledger(self):
+        self._make_nonempty_target()
+        r = serve.migration_plan(self.dst)
+        # 零字节 usage.db 不是有效账本（has_ledger 要求 size>0），但目录非空
+        self.assertFalse(r['has_ledger'])
+        self.assertTrue(r['nonempty_dir'])
+        self.assertTrue(any(i['code'] == 'nonempty_dir' for i in r['issues']))
+        # UI 区分契约：两类标志互相独立、信息分别可读
+        self.assertFalse(r['blocked'], '非空目录本身不进 blocked（由 execute 拒绝）')
+
+    def test_execute_rejects_nonempty_dir_without_overwrite(self):
+        self._make_nonempty_target()
+        before = {n: self._hash_of(os.path.join(self.dst, n))
+                  for n in ('sources.json', 'pricing.json', 'usage.db')}
+        serve.SCAN_LOCK.acquire()
+        try:
+            r = serve.migration_execute(self.dst)
+        finally:
+            serve.SCAN_LOCK.release()
+        self.assertFalse(r.get('ok'), r)
+        self.assertIn('目标校验未通过', r.get('message', ''))
+        # 拒绝后目标文件内容与哈希逐一不变（绝不覆盖）
+        for n, h in before.items():
+            p = os.path.join(self.dst, n)
+            self.assertTrue(os.path.isfile(p), n)
+            self.assertEqual(self._hash_of(p), h, n)
+        # 账本本体绝没有被复制进来
+        self.assertEqual(os.path.getsize(os.path.join(self.dst, 'usage.db')), 0)
+        # 源账本原样
+        self.assertTrue(os.path.isfile(os.path.join(self.src, 'usage.db')))
+
+    def test_execute_rejects_target_with_lookalike_durable_files_only(self):
+        """只有 durable 同名文件（无 usage.db）也必须拒绝 —— copy2 覆盖路径。"""
+        os.makedirs(self.dst)
+        with open(os.path.join(self.dst, 'sources.json'), 'w', encoding='utf-8') as f:
+            f.write('x')
+        before = self._hash_of(os.path.join(self.dst, 'sources.json'))
+        serve.SCAN_LOCK.acquire()
+        try:
+            r = serve.migration_execute(self.dst)
+        finally:
+            serve.SCAN_LOCK.release()
+        self.assertFalse(r.get('ok'), r)
+        self.assertEqual(self._hash_of(os.path.join(self.dst, 'sources.json')), before)
+
+
+class MigrationApiFailureRecovery(unittest.TestCase):
+    """桌面编排契约的 API 级故障注入：quiesce → execute 失败 → resume。
+
+    验证：失败后扫描锁释放、维护态可恢复、源/目标数据完整、写路径恢复。
+    """
+
+    def setUp(self):
+        self.tmp = _safety.sandbox_dir(prefix='ul-migrapi-')
+        self.src = os.path.join(self.tmp, 'src-root')
+        self.dst = os.path.join(self.tmp, 'dst-root')
+        os.makedirs(self.src)
+        os.makedirs(self.dst)
+        import paths
+        self._old_root = paths.DATA_ROOT
+        paths.DATA_ROOT = self.src
+        import sqlite3
+        conn = sqlite3.connect(os.path.join(self.src, 'usage.db'))
+        conn.executescript('''
+            PRAGMA user_version = 3;
+            CREATE TABLE usage_event (id INTEGER PRIMARY KEY, project_key TEXT, tokens INTEGER);
+            CREATE TABLE activity_event (id INTEGER PRIMARY KEY);
+            CREATE TABLE project_registry (project_key TEXT PRIMARY KEY, display_name_manual TEXT);
+            CREATE TABLE session_registry (session_id TEXT PRIMARY KEY, attribution_manual INTEGER DEFAULT 0);
+            CREATE TABLE source_file (path TEXT PRIMARY KEY);
+            INSERT INTO usage_event (project_key, tokens) VALUES ('p1', 100);
+        ''')
+        conn.commit()
+        conn.close()
+        with open(os.path.join(self.dst, 'sources.json'), 'w', encoding='utf-8') as f:
+            f.write('{"user-data": true}')
+        os.makedirs(os.path.join(self.tmp, 'web', 'v1'), exist_ok=True)
+        shutil.copy(os.path.join(ROOT, 'web', 'v1', 'shell.html'),
+                    os.path.join(self.tmp, 'web', 'v1', 'shell.html'))
+        self._old_here, self._old_web = serve.HERE, serve.WEB_DIR
+        self._old_lock = ledger.SCAN_LOCK_PATH
+        serve.HERE = self.tmp
+        serve.WEB_DIR = os.path.join(self.tmp, 'web')
+        ledger.SCAN_LOCK_PATH = os.path.join(self.tmp, 'usage-ledger-scan.lock')
+        serve.MAINTENANCE['quiesced'] = False
+        serve.MAINTENANCE['lock_handle'] = None
+        while serve.SCAN_LOCK.locked():
+            serve.SCAN_LOCK.release()
+        self.port = free_port()
+        self.httpd = ThreadingHTTPServer(('127.0.0.1', self.port), serve.LedgerHandler)
+        t = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        t.start()
+
+    def tearDown(self):
+        try:
+            if serve.MAINTENANCE['quiesced']:
+                if serve.MAINTENANCE.get('lock_handle'):
+                    ledger.release_scan_lock(serve.MAINTENANCE['lock_handle'])
+                serve.MAINTENANCE['quiesced'] = False
+                serve.MAINTENANCE['lock_handle'] = None
+                serve.SCAN_LOCK.release()
+        except Exception:
+            pass
+        import paths
+        paths.DATA_ROOT = self._old_root
+        serve.HERE, serve.WEB_DIR = self._old_here, self._old_web
+        ledger.SCAN_LOCK_PATH = self._old_lock
+        self.httpd.shutdown()
+        self.httpd.server_close()
+
+    @staticmethod
+    def _hash_of(path):
+        import hashlib
+        with open(path, 'rb') as f:
+            return hashlib.sha256(f.read()).hexdigest()
+
+    def test_quiesced_execute_failure_then_resume_restores_everything(self):
+        # 桌面壳编排：quiesce 成功（200）才允许迁移
+        status, body = req(self.port, 'POST', '/api/v1/maintenance/quiesce', {})
+        self.assertEqual(status, 200, body)
+        self.assertTrue(body.get('quiesced'))
+
+        # execute 命中非空目录守卫 → 500 migration_failed
+        status, body = req(self.port, 'POST', '/api/v1/maintenance/migrate/execute',
+                           {'target': self.dst})
+        self.assertEqual(status, 500, body)
+        self.assertEqual(body.get('error'), 'migration_failed')
+        self.assertIn('目标校验未通过', body.get('message', ''))
+
+        # 锁状态：维护态仍持有（未 resume），跨进程锁文件存在
+        self.assertTrue(serve.MAINTENANCE['quiesced'])
+        self.assertIsNotNone(serve.MAINTENANCE['lock_handle'])
+
+        # resume：维护态解除、跨进程锁文件删除
+        status, body = req(self.port, 'POST', '/api/v1/maintenance/resume', {})
+        self.assertEqual(status, 200, body)
+        self.assertFalse(serve.MAINTENANCE['quiesced'])
+        self.assertIsNone(serve.MAINTENANCE['lock_handle'])
+        self.assertFalse(os.path.isfile(ledger.SCAN_LOCK_PATH),
+                         'resume 后跨进程锁文件必须已删除')
+
+        # 数据完整性：源账本与目标文件都逐字节未变（含再次失败后）
+        src_hash = self._hash_of(os.path.join(self.src, 'usage.db'))
+        dst_hash = self._hash_of(os.path.join(self.dst, 'sources.json'))
+        status, body = req(self.port, 'POST', '/api/v1/maintenance/migrate/execute',
+                           {'target': self.dst})
+        self.assertEqual(status, 500, body)
+        self.assertEqual(src_hash, self._hash_of(os.path.join(self.src, 'usage.db')))
+        self.assertEqual(dst_hash, self._hash_of(os.path.join(self.dst, 'sources.json')))
+
+        # 写路径已恢复：不再返回 maintenance 503
+        status, body = req(self.port, 'POST', '/api/v1/projects/alias',
+                           {'project_key': 'no-such', 'alias': 'x'})
+        self.assertNotEqual(body.get('error'), 'maintenance',
+                            'resume 后写路径必须可用（%s）' % body)
+
 
 if __name__ == '__main__':
     unittest.main()

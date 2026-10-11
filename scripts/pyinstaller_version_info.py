@@ -2,12 +2,12 @@
 """智账 · PathOrbit AI Ledger — PyInstaller Windows version resource。
 
 由两个 spec（UsageLedgerBackend.spec / UsageLedger.spec）通过 exec 共享。
-FileVersion 数值映射：0.11.0-rc.2 → (0, 11, 0, 2)（rc 序号进第 4 段）；
-字符串 ProductVersion 保持正式版本 0.11.0-rc.2。
+FileVersion 数值映射：0.11.0-rc.7 → (0, 11, 0, 7)（rc 序号进第 4 段）；
+字符串 ProductVersion 保持正式版本 0.11.0-rc.7。
 """
 
-V_STRING = '0.11.0-rc.2'
-V_NUMERIC = (0, 11, 0, 2)
+V_STRING = '0.11.0-rc.7'
+V_NUMERIC = (0, 11, 0, 7)
 COMPANY = 'PathOrbit'
 
 from PyInstaller.utils.win32.versioninfo import VSVersionInfo  # noqa: E402

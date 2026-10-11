@@ -124,6 +124,62 @@ class TestV1Pages(unittest.TestCase):
                 text = fh.read()
             self.assertNotIn('mapC', text, f)
 
+    def test_v1_onboarding_zero_tools_can_create_empty_ledger(self):
+        """RC.7-r2 P0-A 回归：零工具用户必须能建空账本完成首次引导。
+
+        静态契约（配合 test_discovery 的 no_supported_sources 后端用例）：
+          1. 零工具分支提供 data-action="first-scan-empty"（建立空账本）；
+          2. first-scan 处理器把 no_supported_sources 视为空账本建立的
+             正常完成结果（emptyOk），而不是失败弹回。
+        """
+        with open(os.path.join(ROOT, 'web', 'v1', 'app.js'), encoding='utf-8') as fh:
+            js = fh.read()
+        self.assertIn('first-scan-empty', js, '零工具步骤缺少「建立空账本」入口')
+        self.assertIn('建立空账本', js)
+        # 判别字段契约：空账本完成必须以 sources_found===0 为准（而非
+        # health —— 真零工具与读取失败的 health 都可能是 failed）
+        self.assertIn('result.sources_found===0', js,
+                      '空账本完成缺少 sources_found 判别字段')
+
+    def test_autopilot_frozen_state_files_in_data_root(self):
+        """RC.7-r6 沙盒实测根因回归：frozen 模式下 autopilot 的
+        run-state/health/auto.log 必须落在 Data Root（与 serve/前端
+        同源），而不是 PyInstaller _internal 程序目录。"""
+        with open(os.path.join(ROOT, 'autopilot.py'), encoding='utf-8') as fh:
+            src = fh.read()
+        self.assertIn('HERE = ledger.BASE', src)
+        self.assertNotIn('if getattr(sys, \'frozen\', False):\n    HERE = ledger.BASE',
+                         src, '旧版条件分支应已被无条件对齐替代')
+        # RUN_STATE/AUTO_LOG/HEALTH 三个路径常量必须仍由 HERE 派生
+        for name in ('RUN_STATE_PATH', 'AUTO_LOG_PATH', 'HEALTH_PATH'):
+            self.assertIn(name + " = os.path.join(HERE,", src)
+        # 行为测试：Node 直驱生产 firstScanVerdict（不得只做字符串断言）
+        node = shutil.which('node')
+        if not node:
+            self.skipTest('环境没有 node，跳过前端行为测试')
+        r = subprocess.run(
+            [node, os.path.join(HERE, 'frontend_first_scan.test.mjs')],
+            capture_output=True, text=True, encoding='utf-8',
+            errors='replace', cwd=ROOT, timeout=60)
+        self.assertEqual(r.returncode, 0,
+                         '前端 firstScanVerdict 行为测试失败： | %s | %s'
+                         % (r.stdout[-800:], r.stderr[-800:]))
+        self.assertIn('FRONTEND-FIRST-SCAN-OK', r.stdout)
+
+    def test_debug_test_mode_control_dir_redirect(self):
+        """RC.7-r7 门禁：debug + USAGE_LEDGER_HOME → 控制目录指向测试树。
+        覆盖 bootstrap.rs::control_dir 与 desktop_state.rs::control_dir。"""
+        for f in ('src-tauri/src/bootstrap.rs',
+                  'src-tauri/src/desktop_state.rs'):
+            with open(os.path.join(ROOT, f), encoding='utf-8') as fh:
+                rs = fh.read()
+            self.assertIn('USAGE_LEDGER_HOME', rs,
+                          f'{f} 缺少 debug test mode 检查')
+            self.assertIn('cfg!(debug_assertions)', rs,
+                          f'{f} 缺少 debug_assertions 门禁')
+            self.assertIn('join("control")', rs,
+                          f'{f} 缺少控制目录重定向')
+
     def test_v1_references_real_apis(self):
         with open(os.path.join(ROOT, 'web', 'v1', 'app.js'), encoding='utf-8') as fh:
             js = fh.read()

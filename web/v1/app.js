@@ -21,6 +21,18 @@ const icons = {
   link:'<path d="m9 15 6-6M8 13l-2 2a4 4 0 0 0 6 6l3-3M16 11l2-2a4 4 0 0 0-6-6L9 6"/>'
 };
 const scanOutcome=s=>s==='success'?'success':['partial','partial_failure'].includes(s)?'partial':'error';
+/* firstScanVerdict:begin（纯函数，供 Node 行为测试驱动；勿内联回 handler） */
+const firstScanVerdict=(result)=>{
+  const o=scanOutcome(result.status);
+  if(o==='success'||o==='partial')return 'complete';
+  /* P0-A 检查 1：只有「真零工具」才允许空账本完成引导。判别字段 =
+     sources_found（发现阶段计数）：真零工具=0；来源读取失败≥1
+     （health 两种场景都可能 failed，不能作判别 —— r4 契约复核结论）。
+     来源读取失败必须如实报错。 */
+  if(result.status==='no_supported_sources'&&result.sources_found===0)return 'complete-empty';
+  return 'retry-error';
+};
+/* firstScanVerdict:end */
 const icon=n=>`<span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24">${icons[n]||icons.folder}</svg></span>`;
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=n=>n==null?'暂无具体用量':n>=1e9?(n/1e9).toFixed(2)+'B':n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':n.toLocaleString('en-US');
@@ -394,7 +406,7 @@ function firstRun(){
     t.status==='DETECTED_UNSUPPORTED'||t.data_sources_count>0);
   const storageHtml=`<div class="welcome-heading"><h1>你的账本保存在哪里？</h1><p>智账的使用记录只保存在这台电脑上。</p></div><div class="storage-options"><button class="storage-option ${state.storagePath==null?'active':''}" data-action="storage-default"><strong>使用系统推荐位置</strong><small>%LOCALAPPDATA%\\UsageLedger（推荐）</small></button><button class="storage-option ${state.storagePath!=null?'active':''}" data-action="storage-pick"><strong>选择其他位置…</strong><small>${state.storagePath?esc(state.storagePath):'例如 D:\\智账数据 · 支持中文路径'}</small></button></div><button class="primary" data-action="storage-continue">继续 ${icon('arrow')}</button><p class="onboarding-note">应用安装位置和账本保存位置相互独立；以后可以在设置中安全迁移。</p>`;
   const backgroundHtml=`<div class="welcome-heading"><h1>你希望智账如何后台运行？</h1><p>两项都由你决定，之后可以随时在设置中更改。</p></div><div class="storage-options"><label class="storage-option"><span><input type="checkbox" id="bg-keep"> <strong>关闭窗口后继续后台运行</strong><small>关闭主窗口后智账留在系统托盘，账本更新不中断；不勾选则首次关闭时会再问你一次。</small></span></label><label class="storage-option"><span><input type="checkbox" id="bg-auto"> <strong>登录 Windows 后启动智账</strong><small>开机后自动进入系统托盘，不弹窗打扰。</small></span></label></div><button class="primary" data-action="background-continue">继续 ${icon('arrow')}</button><p class="onboarding-note">两项完全独立：可以只要托盘、只要开机启动、都选或都不选。</p>`;
-  return `<div class="main first-run"><div class="first-head">${brand()}<small>${icon('shield')} 数据只保存在这台电脑</small></div><div class="onboarding"><div class="onboarding-steps">${['欢迎','偏好','找到 AI 工具','建立账本'].map((n,i)=>`<div class="step ${i===stage?'current':''}"><b>${i<stage?'✓':i+1}</b>${n}</div>`).join('')}</div><section class="welcome">${step==='welcome'?`<div class="welcome-heading"><img class="brand-logo" src="/assets/art/brand/zhizhang-128.png" alt="智账"><h1>欢迎使用智账</h1><p>把散落在不同 AI 工具里的使用记录，<br>留在自己手里。</p><p>从不同 AI 工具，汇到你真正做的项目。<br>看清每个项目、每场会话用了多少 AI。</p></div><div class="welcome-principles"><div>${icon('folder')}<h3>自动找到你使用的 AI 工具</h3><p>打开账本时自动检查这台电脑，<br>把分散的使用记录收在一起。</p></div><div>${icon('database')}<h3>留下属于自己的历史</h3><p>入账之后长期保留，<br>工具清理历史也不会丢失。</p></div><div>${icon('shield')}<h3>数据留在你的电脑</h3><p>本地运行，不上传完整路径，<br>没有遥测，也没有云同步。</p></div></div><button class="primary" data-action="onboard-storage">开始 ${icon('arrow')}</button><p class="onboarding-note">只检查标准安装位置的常见数据目录，不会搜索整台电脑，也不会上传任何信息。</p>`:step==='storage'?storageHtml:step==='background'?backgroundHtml:step==='discovered'?`<div class="welcome-heading"><h1>已找到 ${found.length} 个 AI 工具</h1><p>不同工具留下的信息不同，我们会如实记在账本里。</p></div><div class="discovered">${found.map(toolRow).join('')||`<div class="state-icon">${icon('folder')}</div><h1>暂时没有发现可读取的 AI 工具</h1><p class="subtitle">先在支持的工具中使用一次 AI，再回来重新发现。</p>`}</div>${found.length?`<button class="primary" data-action="first-scan">建立我的账本</button><p class="onboarding-note">没有具体用量的工具，也会留下使用过的记录。</p>`:`<button class="primary" data-action="discover">重新发现</button><p class="onboarding-note">也可以稍后在设置的「AI 工具」里手动配置数据源（高级）。</p>`}`:step==='scanning'?`<div class="state-icon">${icon('scan')}</div><h1>正在为你建立账本</h1><p class="subtitle">读取刚刚找到的 AI 工具，把使用记录保存在本机。</p><div class="scan-progress"><i></i></div><p class="onboarding-note">稍等片刻，完成后即可查看你的项目。首次更新账本可能需要几分钟。</p>`:`<div class="state-icon success">${icon('shield')}</div><h1>智账已经建立</h1><p class="subtitle">以后用过的 AI，都有据可查。</p><div class="onboarding-result"><div><strong>${(state.data.by_project||[]).length}</strong><span>个项目</span></div><div><strong>${(state.data.aggregate||{}).sessions||0}</strong><span>场 AI 会话</span></div><div><strong>${found.length}</strong><span>个 AI 工具</span></div></div><p class="quiet-explanation">部分工具只有使用痕迹，部分用量暂无价格。<br>这些差异都会明确说明，不会算成「免费」或「没有使用」。</p><button class="primary" data-nav="overview">查看总览 ${icon('arrow')}</button>`}</section><p class="onboarding-note">智账 · 每一次使用，慢慢沉淀为自己的长期记录。</p></div></div>`;
+  return `<div class="main first-run"><div class="first-head">${brand()}<small>${icon('shield')} 数据只保存在这台电脑</small></div><div class="onboarding"><div class="onboarding-steps">${['欢迎','偏好','找到 AI 工具','建立账本'].map((n,i)=>`<div class="step ${i===stage?'current':''}"><b>${i<stage?'✓':i+1}</b>${n}</div>`).join('')}</div><section class="welcome">${step==='welcome'?`<div class="welcome-heading"><img class="brand-logo" src="/assets/art/brand/zhizhang-128.png" alt="智账"><h1>欢迎使用智账</h1><p>把散落在不同 AI 工具里的使用记录，<br>留在自己手里。</p><p>从不同 AI 工具，汇到你真正做的项目。<br>看清每个项目、每场会话用了多少 AI。</p></div><div class="welcome-principles"><div>${icon('folder')}<h3>自动找到你使用的 AI 工具</h3><p>打开账本时自动检查这台电脑，<br>把分散的使用记录收在一起。</p></div><div>${icon('database')}<h3>留下属于自己的历史</h3><p>入账之后长期保留，<br>工具清理历史也不会丢失。</p></div><div>${icon('shield')}<h3>数据留在你的电脑</h3><p>本地运行，不上传完整路径，<br>没有遥测，也没有云同步。</p></div></div><button class="primary" data-action="onboard-storage">开始 ${icon('arrow')}</button><p class="onboarding-note">只检查标准安装位置的常见数据目录，不会搜索整台电脑，也不会上传任何信息。</p>`:step==='storage'?storageHtml:step==='background'?backgroundHtml:step==='discovered'?`<div class="welcome-heading"><h1>已找到 ${found.length} 个 AI 工具</h1><p>不同工具留下的信息不同，我们会如实记在账本里。</p></div><div class="discovered">${found.map(toolRow).join('')||`<div class="state-icon">${icon('folder')}</div><h1>暂时没有发现可读取的 AI 工具</h1><p class="subtitle">先在支持的工具中使用一次 AI，再回来重新发现。</p>`}</div>${found.length?`<button class="primary" data-action="first-scan">建立我的账本</button><p class="onboarding-note">没有具体用量的工具，也会留下使用过的记录。</p>`:`<div class="onb-actions"><button class="primary" data-action="first-scan-empty">建立空账本（稍后再找工具）</button><button class="text-button" data-action="discover">重新发现</button></div><p class="onboarding-note">现在没有发现工具，也可以先建一本空账本；之后装好或开始使用 AI 工具，随时「更新账本」即可把记录收进来。高级用户也可在设置的「AI 工具」里手动配置数据源（高级）。</p>`}`:step==='scanning'?`<div class="state-icon">${icon('scan')}</div><h1>正在为你建立账本</h1><p class="subtitle">读取刚刚找到的 AI 工具，把使用记录保存在本机。</p><div class="scan-progress"><i></i></div><p class="onboarding-note">稍等片刻，完成后即可查看你的项目。首次更新账本可能需要几分钟。</p>`:`<div class="state-icon success">${icon('shield')}</div><h1>智账已经建立</h1><p class="subtitle">以后用过的 AI，都有据可查。</p><div class="onboarding-result"><div><strong>${(state.data.by_project||[]).length}</strong><span>个项目</span></div><div><strong>${(state.data.aggregate||{}).sessions||0}</strong><span>场 AI 会话</span></div><div><strong>${found.length}</strong><span>个 AI 工具</span></div></div><p class="quiet-explanation">部分工具只有使用痕迹，部分用量暂无价格。<br>这些差异都会明确说明，不会算成「免费」或「没有使用」。</p><button class="primary" data-nav="overview">查看总览 ${icon('arrow')}</button>`}</section><p class="onboarding-note">智账 · 每一次使用，慢慢沉淀为自己的长期记录。</p></div></div>`;
 }
 function confirmation(){return `<div class="scrim" data-action="cancel-confirm"></div><section class="modal" role="dialog" aria-modal="true" aria-label="确认整理项目"><div class="drawer-head"><h2>${state.pending.type==='alias'?'确认修改项目名称':state.pending.type==='merge'?'确认合并重复项目':'确认移动这些会话'}</h2><p class="subtitle">先核对目标项目，再完成整理。</p></div><div class="modal-body"><div class="preview"><div><strong>${esc(state.pending.description)}</strong><small>使用记录不会重复计算，原始 AI 工具文件保持不变。</small></div></div><p class="quiet-explanation">${state.pending.type==='alias'?'只改变显示名称，项目身份、会话和用量保持不变。':state.pending.type==='merge'?'整理后，这些自动识别结果会汇入同一个项目，原始来源仍可追溯。':'这些会话及使用记录会归到目标项目，工具、时间和用量都保持不变。手工归档不会被后续更新账本覆盖。'}</p></div><div class="modal-actions"><small>保存到本机账本 · 失败时保留原关系</small><div class="inline"><button data-action="cancel-confirm">返回修改</button><button class="primary" data-action="confirm-attribution">确认${state.pending.type==='alias'?'保存名称':state.pending.type==='merge'?'合并':'移动'}</button></div></div></section>`}
 /* RC.3 安全迁移弹层（§29-36） */
@@ -550,18 +562,27 @@ document.addEventListener('click',async e=>{
   else if(act==='close-event'){state.chosenEvent=null;render();}
   else if(act==='confidence-settings'){state.settingTab='sources';nav('settings');}
   else if(act==='discover'){state.onboarding='discovered';await loadDiscover(true);render();}
-  else if(act==='first-scan'){
+  else if(act==='first-scan'||act==='first-scan-empty'){
     if(state.onboarding==='scanning')return;
+    /* P0-A：零工具用户允许建立空账本——no_supported_sources 是
+       「已建立空账本」的正常结果而非失败；之后发现 AI 工具时
+       「更新账本」即可导入记录。 */
     state.onboarding='scanning';render();
     try{
       const result=await post('/api/v1/scan',{});
       await loadHealth();await loadDiscover(true);await loadUnassigned();await loadQuery();
-      if((scanOutcome(result.status)==='success'||scanOutcome(result.status)==='partial')&&state.data.ledger_state?.has_records){
+      const v=firstScanVerdict(result);
+      if(v==='complete'||v==='complete-empty'){
         state.onboarding='complete';
         try{sessionStorage.removeItem('zhizhang.onboarding');}catch(e){}
         /* §58：First Run 完成即记录当前版本，不再弹 What's New */
         tauriInvoke('complete_first_run').catch(()=>{});
-      }else{state.onboarding='discovered';toast('暂时没能建立账本，请检查来源后重试');}
+      }else{
+        state.onboarding='discovered';
+        /* P0-A 检查 1：来源读取失败必须展示具体原因，不得伪装成空账本成功 */
+        const reason=(result.errors&&result.errors[0])||'请检查来源后重试';
+        toast('暂时没能建立账本：'+reason);
+      }
     }catch(err){state.onboarding='discovered';toast(err.status===409?'已有更新正在进行，请稍后重试':'暂时没能建立账本，请重试');}
     render();
   }
@@ -747,12 +768,15 @@ try{const ev=window.__TAURI__&&window.__TAURI__.event;
   await Promise.all([loadIdentity(),loadHealth(),loadDiscover(),loadDesktop()]);  // 桌面壳状态失败 = 浏览器开发态
   await loadUnassigned();
   await loadReplayCount();
-  // 空账本（首次使用）：overview 无数据且无任何会话 → First Run
-  try{
+    // 空账本（首次使用）：overview 无数据且无任何会话 → First Run。
+    // P0-A 检查 1：已完成首次引导的空账本用户（first_run_complete）
+    // 重启后必须直接进入主界面，不得被弹回引导。
+    try{
     await loadQuery();
     state.booted=true;state.error=null;
     const a=(state.data.aggregate||{});
-    if(!state.data.ledger_state?.has_records&&state.view==='overview'){state.view='first-run';}
+    if(!state.data.ledger_state?.has_records&&state.view==='overview'
+       &&!(state.desktop&&state.desktop.first_run_complete)){state.view='first-run';}
   }catch(e){
     state.booted=true;
     if(e.status===0||e.status===404)state.fatal='本地服务不可达：'+e.message;

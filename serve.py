@@ -44,6 +44,19 @@ SERVER_LOG_PATH = os.path.join(HERE, 'server.log')
 SERVER_LOG_MAX = 512 * 1024
 SCAN_LOCK_STALE_HINT = '删除 usage-ledger-scan.lock 前请先确认锁内 PID 已退出'
 
+
+def rebind_state_paths_to_data_root():
+    """frozen：server-state/server.log 与 run-state/health 同源落 Data Root。
+
+    RC.7-r6 契约复核：SERVER_STATE_PATH/SERVER_LOG_PATH 在模块加载时绑定
+    HERE（frozen onedir = _internal 程序目录），而 main() 把 HERE 重指
+    DATA_ROOT 后模块常量不会自动重算 —— 运行态文件会残留程序目录。
+    WEB_DIR 不重绑：_internal\\web 是随包只读 UI 资源，属程序文件。
+    """
+    global SERVER_STATE_PATH, SERVER_LOG_PATH
+    SERVER_STATE_PATH = os.path.join(HERE, 'server-state.json')
+    SERVER_LOG_PATH = os.path.join(HERE, 'server.log')
+
 SCAN_LOCK = threading.Lock()    # 进程内互斥（跨进程锁由 ledger 扫描锁承担）
 SCAN_STATE = {'running': False}
 
@@ -244,7 +257,13 @@ def migration_execute(target):
     """
     import paths
     plan = migration_plan(target)
-    if plan['blocked'] or plan['has_ledger']:
+    # §32-33 执行层守卫：blocked（同位置/安装目录嵌套/坏路径/盘不可用/不可写）、
+    # 目标已有账本、目标为非空目录 —— 三者一律拒绝。
+    # 非空目录守卫（RC.6 专项修复）：plan 里 nonempty_dir 只是"提醒不覆盖"，
+    # 但下方 copy2 会静默覆盖目标同名文件（如残留的 sources.json /
+    # pricing.json / 零字节 usage.db）。执行层必须与 UI 弹窗同一口径：
+    # 非空即拒，绝不覆盖。
+    if plan['blocked'] or plan['has_ledger'] or plan['nonempty_dir']:
         return {'ok': False,
                 'message': '目标校验未通过：%s' % '；'.join(
                     i['message'] for i in plan['issues'])}
@@ -646,6 +665,10 @@ def run_scan_once():
             'ok': code == 0 and rs.get('status') == 'success',
             'status': rs.get('status'),
             'exit_code': code,
+            # sources_found（发现阶段计数）是前端区分「真零工具」与
+            # 「来源读取失败」的唯一可靠判别字段（health 两种场景都可能是
+            # failed，不能用于判别 —— RC.7-r4 契约复核结论）
+            'sources_found': rs.get('sources_found', 0),
             'events_inserted': rs.get('events_inserted', 0),
             'events_updated': rs.get('events_updated', 0),
             'board_written': (rs.get('board') or {}).get('written', False),
@@ -673,6 +696,7 @@ def run_scan_once():
         'ok': r.returncode == 0 and rs.get('status') == 'success',
         'status': rs.get('status'),
         'exit_code': r.returncode,
+        'sources_found': rs.get('sources_found', 0),
         'events_inserted': rs.get('events_inserted', 0),
         'events_updated': rs.get('events_updated', 0),
         'board_written': (rs.get('board') or {}).get('written', False),
@@ -1999,6 +2023,9 @@ def main():
         paths.ensure_data_root()
         global HERE
         HERE = paths.DATA_ROOT
+        # RC.7-r6 契约复核：server-state/server.log 与 run-state/health 同源
+        # —— 必须落 Data Root，不得残留 _internal 程序目录（路径分裂修复）。
+        rebind_state_paths_to_data_root()
         if not args.stop and not args.check_only and not args.no_open:
             args.open = True  # 打包版默认打开浏览器（桌面壳以 --no-open 抑制）
     _redirect_none_streams()

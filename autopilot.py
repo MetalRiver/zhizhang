@@ -50,6 +50,16 @@ sys.path.insert(0, HERE)
 
 import ledger  # noqa: E402
 
+# RC.7-r6 修复（P0-A 沙盒实测）：frozen sidecar 中 __file__ 位于
+# _internal（程序目录），而 serve/前端从 paths.DATA_ROOT 读
+# run-state/health —— 此前 autopilot 的运行态文件全部写进 _internal，
+# 导致 serve 读到空 run-state（status=None），首次引导「建立空账本」
+# 被误判失败，独立 health 与 board 内嵌 health 分裂。
+# RC.7-r7 扩展：dev 模式设 USAGE_LEDGER_HOME 时同样存在分裂
+# （ledger.BASE ≠ 仓库根），故统一对齐：HERE 始终 = ledger.BASE。
+# dev 无 USAGE_LEDGER_HOME 时 ledger.BASE = 仓库根 = 原 HERE，行为不变。
+HERE = ledger.BASE
+
 RUN_STATE_PATH = os.path.join(HERE, 'run-state.json')
 AUTO_LOG_PATH = os.path.join(HERE, 'auto.log')
 # 自动同步配置：install-auto 注册成功后写入，卸载时删除。

@@ -43,7 +43,9 @@ if getattr(sys, 'frozen', False):
     BASE = os.environ.get('USAGE_LEDGER_HOME') or os.path.join(_local, 'UsageLedger')
     os.makedirs(BASE, exist_ok=True)
 else:
-    BASE = os.path.dirname(os.path.abspath(__file__))
+    # RC.7-r7：dev 模式也容许 USAGE_LEDGER_HOME 覆盖 Data Root，
+    # 使本地桌面调试可指向独立合成目录而不触碰仓库根的真实来源配置。
+    BASE = os.environ.get('USAGE_LEDGER_HOME') or os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE, 'usage.db')
 PRICING_PATH = os.path.join(BASE, 'pricing.json')          # 手工覆盖，优先级最高
 PRICING_AUTO_PATH = os.path.join(BASE, 'pricing.auto.json')  # 自动同步产物
@@ -193,7 +195,11 @@ SEARCH_ROOTS = []
 SOURCES_OVERRIDE = os.path.join(BASE, 'sources.json')
 if os.path.isfile(SOURCES_OVERRIDE):
     try:
-        with open(SOURCES_OVERRIDE, encoding='utf-8') as _f:
+        # RC.7-r2 修复：Windows 工具写出的配置常带 UTF-8 BOM
+        # （PowerShell 5.1 Out-File -Encoding utf8 即如此），utf-8-sig
+        # 容 BOM 读取；此前 BOM 会导致覆盖静默失效（异常只打到被
+        # sidecar 丢弃的 stderr），自动发现回退默认候选 → 0 工具。
+        with open(SOURCES_OVERRIDE, encoding='utf-8-sig') as _f:
             _ov = json.load(_f)
         for _root in (_ov.get('_search_roots') or []):
             if isinstance(_root, str) and _root.strip():
@@ -225,7 +231,8 @@ RESOLVED_PATH = os.path.join(BASE, 'resolved-sources.json')
 _explicit_paths = set()
 if os.path.isfile(SOURCES_OVERRIDE):
     try:
-        with open(SOURCES_OVERRIDE, encoding='utf-8') as _f:
+        # 同上：容 BOM（同一文件的第二个读取点，r1 沙盒 0 发现根因之一）
+        with open(SOURCES_OVERRIDE, encoding='utf-8-sig') as _f:
             _explicit_paths = {k for k, v in json.load(_f).items()
                                if not k.startswith('_') and isinstance(v, str) and v.strip()}
     except Exception:

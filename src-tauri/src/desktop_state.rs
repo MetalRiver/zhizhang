@@ -45,7 +45,16 @@ impl Default for DesktopState {
 }
 
 /// 固定控制目录（永远不随 data_root 迁移）。
+/// RC.7-r7 debug test mode：USAGE_LEDGER_HOME + debug → 控制目录指向测试树
+/// （与 bootstrap.rs::control_dir 同步，不读写宿主真实控制目录）。
 pub fn control_dir() -> PathBuf {
+    if cfg!(debug_assertions) {
+        if let Ok(test_root) = std::env::var("USAGE_LEDGER_HOME") {
+            if !test_root.is_empty() {
+                return PathBuf::from(&test_root).join("control");
+            }
+        }
+    }
     let base = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
         .unwrap_or_else(|| {

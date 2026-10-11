@@ -121,6 +121,17 @@ impl LifecycleState {
 
 /// 启动时解析 data root（§22-25、§37-39）。返回 (root, recovery)。
 fn resolve_boot_data_root() -> (std::path::PathBuf, Option<RecoveryInfo>) {
+    // RC.7-r7 dev test mode：USAGE_LEDGER_HOME + debug build → 跳过 bootstrap，
+    // 直接使用测试 Data Root（不读/不写宿主真实 bootstrap.json）。
+    // 仅 debug 构建生效（cfg! 编译期消除）；release 行为不变。
+    if cfg!(debug_assertions) {
+        if let Ok(test_root) = std::env::var("USAGE_LEDGER_HOME") {
+            let p = std::path::PathBuf::from(&test_root);
+            if p.is_dir() {
+                return (p, None);
+            }
+        }
+    }
     match bootstrap::resolve() {
         bootstrap::DataResolution::FromBootstrap(root) => {
             if bootstrap::root_available(&root) {
@@ -1434,37 +1445,82 @@ fn migrate_data_root_execute(app: AppHandle, target: String) -> Result<serde_jso
     result
 }
 
+/// 维护闸门（RC.6 迁移安全专项）：只有 200 才允许迁移。
+/// 409 = 扫描/维护正在进行、维护态**没有**进入 —— 绝不带闸迁移
+/// （旧行为把 409 当继续，是本次修复的缺陷之一）。
+fn maintenance_entry_gate(status: u16) -> Result<(), String> {
+    if status == 200 {
+        Ok(())
+    } else {
+        Err(format!(
+            "无法进入维护状态（{status}）：已有扫描或维护正在进行，请稍后再试"
+        ))
+    }
+}
+
+/// bootstrap 尚未切换时的失败收尾：尽力恢复写路径；
+/// resume 自身失败时必须如实报告需要人工恢复，绝不声称已恢复。
+fn migrate_failure_message(resume_ok: bool, prior: String) -> String {
+    if resume_ok {
+        prior
+    } else {
+        format!(
+            "{prior}；自动恢复账本更新失败——请重启智账（或手动重启后台服务）后重试。\
+             账本数据未丢失，仍在原位置"
+        )
+    }
+}
+
+/// 尽力 resume（后端存活时解除维护态）；返回是否确认成功。
+fn try_resume_backend() -> bool {
+    matches!(
+        http_json(BACKEND_PORT, "POST", "/api/v1/maintenance/resume", Some("{}"), 8000),
+        Some((200, _))
+    )
+}
+
 fn migrate_execute_inner(app: &AppHandle, target: &str) -> Result<serde_json::Value, String> {
-    // 1) 停止 scheduled work / 禁止新写
+    // 1) 进入维护态：只有 200 才算成功（409 = 已有扫描，绝不继续）
     let (qs, _) = http_json(BACKEND_PORT, "POST", "/api/v1/maintenance/quiesce", Some("{}"), 8000)
         .ok_or_else(|| "本地服务无响应，迁移未开始".to_string())?;
-    if qs != 200 && qs != 409 {
-        return Err(format!("无法进入维护状态（{qs}），迁移未开始"));
-    }
+    maintenance_entry_gate(qs)?;
 
-    // 2) 复制 + 目标验证（backend 持有扫描锁执行）
+    // 2) 复制 + 目标验证（backend 持有扫描锁执行）。
+    //    bootstrap 尚未切换：此阶段任何失败都必须尝试 resume。
     let body = serde_json::json!({ "target": target }).to_string();
-    let (es, text) = http_json(
+    match http_json(
         BACKEND_PORT,
         "POST",
         "/api/v1/maintenance/migrate/execute",
         Some(&body),
         600000,
-    )
-    .ok_or_else(|| "本地服务无响应，迁移中止".to_string())?;
-    if es != 200 {
-        // §35：bootstrap 不动，恢复写路径，原账本继续可用
-        let _ = http_json(BACKEND_PORT, "POST", "/api/v1/maintenance/resume", Some("{}"), 8000);
-        let msg = serde_json::from_str::<serde_json::Value>(text.trim())
-            .ok()
-            .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(|s| s.to_string()))
-            .unwrap_or_else(|| format!("迁移失败（{es}）"));
-        return Err(msg);
+    ) {
+        None => return Err(migrate_failure_message(
+            try_resume_backend(),
+            "本地服务无响应，迁移中止".into(),
+        )),
+        Some((es, text)) if es != 200 => {
+            let msg = serde_json::from_str::<serde_json::Value>(text.trim())
+                .ok()
+                .and_then(|v| v.get("message").and_then(|m| m.as_str()).map(|s| s.to_string()))
+                .unwrap_or_else(|| format!("迁移失败（{es}）"));
+            return Err(migrate_failure_message(try_resume_backend(), msg));
+        }
+        // 其余只可能是 200 成功（非 200 已在上面返回）
+        Some(_) => {}
     }
 
-    // 3) 原子切换 bootstrap → 新根重启（resume 不再需要：backend 将被收尾）
+    // 3) 原子切换 bootstrap → 新根重启。
+    //    切换失败 = 后端仍存活且处于维护态 → 必须 resume，否则写路径一直 503。
+    //    切换成功后的失败属于"已提交"：新根数据已验证存在，由恢复界面兜底，
+    //    不 resume（旧后端即将被收尾）。
     let root = std::path::PathBuf::from(target);
-    bootstrap::write(&root).map_err(|e| format!("bootstrap 切换失败：{e}"))?;
+    if let Err(e) = bootstrap::write(&root) {
+        return Err(migrate_failure_message(
+            try_resume_backend(),
+            format!("bootstrap 切换失败：{e}"),
+        ));
+    }
     let mut st = desktop_state::load();
     st.first_run_complete = true;
     let _ = desktop_state::save(&st);
@@ -1814,5 +1870,48 @@ mod tests {
         };
         assert!(identity_reuse_compatible(&id, &exp).is_ok());
         assert!(identity_reuse_compatible(&id, &expected()).is_err());
+    }
+}
+
+#[cfg(test)]
+mod migrate_gate_tests {
+    // RC.6 迁移安全专项：维护闸门与失败恢复消息的可注入测试。
+    // （migrate_execute_inner 的 HTTP 编排需要 AppHandle + 活体 backend，
+    //   不做进程内伪造；此处验证两个纯决策点的全部分支。）
+    use super::{maintenance_entry_gate, migrate_failure_message};
+
+    #[test]
+    fn quiesce_200_allows_migration() {
+        assert!(maintenance_entry_gate(200).is_ok());
+    }
+
+    #[test]
+    fn quiesce_409_aborts_not_continues() {
+        // 旧缺陷：409（扫描进行中、维护态未进入）曾被当成"可以继续"。
+        let e = maintenance_entry_gate(409).unwrap_err();
+        assert!(e.contains("无法进入维护状态"), "{e}");
+        assert!(e.contains("409"), "{e}");
+        assert!(e.contains("请稍后再试"), "{e}");
+    }
+
+    #[test]
+    fn quiesce_other_status_aborts() {
+        for s in [0u16, 403, 500, 503] {
+            assert!(maintenance_entry_gate(s).is_err(), "status {s}");
+        }
+    }
+
+    #[test]
+    fn resume_ok_reports_plain_reason() {
+        assert_eq!(migrate_failure_message(true, "迁移中止".into()), "迁移中止");
+    }
+
+    #[test]
+    fn resume_failed_escalates_to_manual_recovery() {
+        let m = migrate_failure_message(false, "bootstrap 切换失败：disk io".into());
+        assert!(m.contains("bootstrap 切换失败"), "{m}");
+        assert!(m.contains("自动恢复账本更新失败"), "{m}");
+        assert!(m.contains("重启智账"), "{m}");
+        assert!(m.contains("账本数据未丢失"), "{m}");
     }
 }
