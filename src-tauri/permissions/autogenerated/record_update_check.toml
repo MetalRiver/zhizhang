@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-record-update-check"
+description = "Enables the record_update_check command without any pre-configured scope."
+commands.allow = ["record_update_check"]
+
+[[permission]]
+identifier = "deny-record-update-check"
+description = "Denies the record_update_check command without any pre-configured scope."
+commands.deny = ["record_update_check"]

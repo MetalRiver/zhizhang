@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-clear-update-notice"
+description = "Enables the clear_update_notice command without any pre-configured scope."
+commands.allow = ["clear_update_notice"]
+
+[[permission]]
+identifier = "deny-clear-update-notice"
+description = "Denies the clear_update_notice command without any pre-configured scope."
+commands.deny = ["clear_update_notice"]

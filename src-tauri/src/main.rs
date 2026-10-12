@@ -1546,6 +1546,7 @@ fn set_close_behavior(behavior: String) -> Result<(), String> {
     if behavior != desktop_state::CLOSE_BACKGROUND && behavior != desktop_state::CLOSE_EXIT {
         return Err(format!("非法 close_behavior：{behavior}"));
     }
+    let _g = desktop_state_guard();
     let mut st = desktop_state::load();
     st.close_behavior = Some(behavior);
     desktop_state::save(&st)
@@ -1561,6 +1562,15 @@ fn set_autostart(app: AppHandle, enable: bool) -> Result<bool, String> {
     Ok(app.autolaunch().is_enabled().unwrap_or(false))
 }
 
+/// V1.0.0：desktop-state.json 的「读-改-写」串行化。
+/// 防止「启动时自动检查」写入状态记录时，覆盖用户刚刚保存的开关偏好（并发竞争）。
+static DESKTOP_STATE_IO: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// 取得 desktop-state 写锁；中毒时恢复内部值，避免一次 panic 永久阻断保存。
+fn desktop_state_guard() -> std::sync::MutexGuard<'static, ()> {
+    DESKTOP_STATE_IO.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// V1.0.0：软件更新检查时间戳（Unix 毫秒，UTC）。
 fn now_epoch_ms() -> u64 {
     std::time::SystemTime::now()
@@ -1569,9 +1579,10 @@ fn now_epoch_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// V1.0.0：设置「启动时自动检查软件更新」开关（默认关闭）。返回落库后的值。
+/// V1.0.0：设置「启动时自动检查软件更新」开关（默认开启，用户可关闭）。返回落库后的值。
 #[tauri::command]
 fn set_auto_check_update(enable: bool) -> Result<bool, String> {
+    let _g = desktop_state_guard();
     let mut st = desktop_state::load();
     st.auto_check_update = enable;
     desktop_state::save(&st)?;
@@ -1580,11 +1591,13 @@ fn set_auto_check_update(enable: bool) -> Result<bool, String> {
 
 /// V1.0.0：记录一次软件更新检查结果（时间 + 可用版本/说明）。
 /// 仅用于 24 小时节流与侧边栏「发现新版本」提醒；不下载、不安装、不上传。
+/// 只改这两个字段，绝不触碰用户保存的其它偏好（如 auto_check_update）。
 #[tauri::command]
 fn record_update_check(
     available_version: Option<String>,
     notes: Option<String>,
 ) -> Result<(), String> {
+    let _g = desktop_state_guard();
     let mut st = desktop_state::load();
     st.last_update_check_ms = Some(now_epoch_ms());
     st.update_available_version = available_version.filter(|s| !s.trim().is_empty());
@@ -1592,9 +1605,10 @@ fn record_update_check(
     desktop_state::save(&st)
 }
 
-/// V1.0.0：清除「发现新版本」提醒（升级完成 / 已是最新）。不改动节流时间。
+/// V1.0.0：清除「发现新版本」提醒（升级完成 / 已是最新）。不改动节流时间与用户偏好。
 #[tauri::command]
 fn clear_update_notice() -> Result<(), String> {
+    let _g = desktop_state_guard();
     let mut st = desktop_state::load();
     st.update_available_version = None;
     st.update_available_notes = None;

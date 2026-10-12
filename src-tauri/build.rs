@@ -17,6 +17,9 @@ fn main() {
             "migrate_data_root_execute",
             "check_for_update",
             "download_and_install_update",
+            "set_auto_check_update",
+            "record_update_check",
+            "clear_update_notice",
         ])),
     )
     .expect("failed to run tauri-build");

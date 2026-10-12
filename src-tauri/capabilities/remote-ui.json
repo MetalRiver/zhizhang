@@ -26,6 +26,9 @@
     "allow-migrate-data-root-plan",
     "allow-migrate-data-root-execute",
     "allow-check-for-update",
-    "allow-download-and-install-update"
+    "allow-download-and-install-update",
+    "allow-set-auto-check-update",
+    "allow-record-update-check",
+    "allow-clear-update-notice"
   ]
 }

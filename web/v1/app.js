@@ -765,7 +765,10 @@ document.addEventListener('click',async e=>{
     const on=dsk.auto_check_update!==true;
     try{await tauriInvoke('set_auto_check_update',{enable:on});await loadDesktop();render();
       if(on)maybeAutoCheckUpdate();   /* 关闭→开启：立即做一次受 24h 节流控制的检查，无需重启 */
-    }catch(err){toast('设置未保存，请重试');}}
+    }catch(err){
+      /* 保存失败：不改动本地状态，改为从磁盘重新读取真实值，确保 UI 与磁盘一致，并如实提示原因 */
+      try{await loadDesktop();render();}catch(e){}
+      toast('设置未保存：'+(err&&err.message?err.message:String(err)));}}
   else if(act==='show-changelog'){
     try{const cl=await api('/v1/changelog.json');state.changelogData=cl;state.overlay='changelog';render();}
     catch(err){toast('暂时无法读取更新记录');}}
