@@ -1122,6 +1122,9 @@ fn main() {
             get_desktop_state,
             set_close_behavior,
             set_autostart,
+            set_auto_check_update,
+            record_update_check,
+            clear_update_notice,
             get_boot_info,
             retry_recovery,
             complete_first_run,
@@ -1197,6 +1200,10 @@ fn get_desktop_state(app: AppHandle) -> serde_json::Value {
         "close_behavior": desktop_state::resolve_close_behavior(&st),
         "first_run_complete": st.first_run_complete,
         "last_seen_version": st.last_seen_version,
+        "auto_check_update": st.auto_check_update,
+        "last_update_check_ms": st.last_update_check_ms,
+        "update_available_version": st.update_available_version,
+        "update_available_notes": st.update_available_notes,
         "autostart_enabled": autostart_enabled,
         "data_root": root.to_string_lossy(),
         "data_root_kind": bootstrap::data_root_kind(&root),
@@ -1552,6 +1559,46 @@ fn set_autostart(app: AppHandle, enable: bool) -> Result<bool, String> {
     let result = if enable { launcher.enable() } else { launcher.disable() };
     result.map_err(|e| format!("开机启动注册失败：{e}"))?;
     Ok(app.autolaunch().is_enabled().unwrap_or(false))
+}
+
+/// V1.0.0：软件更新检查时间戳（Unix 毫秒，UTC）。
+fn now_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// V1.0.0：设置「启动时自动检查软件更新」开关（默认关闭）。返回落库后的值。
+#[tauri::command]
+fn set_auto_check_update(enable: bool) -> Result<bool, String> {
+    let mut st = desktop_state::load();
+    st.auto_check_update = enable;
+    desktop_state::save(&st)?;
+    Ok(enable)
+}
+
+/// V1.0.0：记录一次软件更新检查结果（时间 + 可用版本/说明）。
+/// 仅用于 24 小时节流与侧边栏「发现新版本」提醒；不下载、不安装、不上传。
+#[tauri::command]
+fn record_update_check(
+    available_version: Option<String>,
+    notes: Option<String>,
+) -> Result<(), String> {
+    let mut st = desktop_state::load();
+    st.last_update_check_ms = Some(now_epoch_ms());
+    st.update_available_version = available_version.filter(|s| !s.trim().is_empty());
+    st.update_available_notes = notes.filter(|s| !s.trim().is_empty());
+    desktop_state::save(&st)
+}
+
+/// V1.0.0：清除「发现新版本」提醒（升级完成 / 已是最新）。不改动节流时间。
+#[tauri::command]
+fn clear_update_notice() -> Result<(), String> {
+    let mut st = desktop_state::load();
+    st.update_available_version = None;
+    st.update_available_notes = None;
+    desktop_state::save(&st)
 }
 
 /// 打开账本数据目录（设置/恢复页「打开文件夹」）。

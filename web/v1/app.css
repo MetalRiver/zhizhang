@@ -27,10 +27,12 @@ small,.kpi-label,.subtitle,.eyebrow,.panel-heading p,.panel-heading>small,.proje
 @media(max-width:1390px){.settings-layout{grid-template-columns:106px minmax(0,1fr);gap:27px}.settings-main .settings-header{margin-bottom:26px}.settings-nav button{padding-left:10px;font-size:14px}.settings-page-heading{padding-bottom:20px}.settings-group{padding:21px 0 23px}.settings-row{gap:23px;padding:15px 0}.settings-row p,.settings-tool p{font-size:13px}.settings-tool{padding:15px 0}.settings-main .disclosure>summary{padding:17px 0}}
 @media(max-width:1230px){.settings-layout{grid-template-columns:98px minmax(0,1fr);gap:24px}.settings-nav button{font-size:13px;padding-left:9px;padding-right:4px;min-height:36px}.settings-nav .nav-group-start{margin-top:13px}.settings-main .settings-header{margin-bottom:24px}.settings-page-heading h2{font-size:21px}.settings-page-heading p{font-size:14px}.settings-row{gap:20px}.settings-row strong,.settings-group>h3{font-size:14px}.settings-row p{font-size:13px}.settings-row>button{min-width:99px}.settings-update-facts{gap:18px}.settings-tool{padding:15px 0}.settings-tool p{font-size:13px}.settings-main .settings-content{padding:0}.settings-about-facts>div{grid-template-columns:110px minmax(0,1fr);gap:15px}}
 /* RC.3 后台与启动开关（设置 → 常用） */
-.switch{position:relative;width:40px;height:22px;border-radius:11px;border:1px solid var(--line);background:#e8e9e4;padding:0;cursor:pointer;transition:background .15s,border-color .15s;flex:0 0 auto}
-.switch .knob{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:left .15s}
+.switch{position:relative;width:48px;height:26px;min-width:48px;min-height:26px;border-radius:13px;border:1px solid var(--line);background:#e8e9e4;padding:0;cursor:pointer;transition:background .15s,border-color .15s;flex:0 0 auto}
+/* 覆盖 .settings-row>button{min-width:101px} 与 button{min-height:35px}，保持 48×26 开关比例 */
+.settings-row>button.switch{min-width:48px;min-height:26px}
+.switch .knob{position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:left .15s}
 .switch.on{background:var(--gold);border-color:var(--gold)}
-.switch.on .knob{left:20px}
+.switch.on .knob{left:24px}
 .switch:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
 /* RC.3 First Run 数据位置 / 后台方式选项 */
 .storage-options{display:flex;flex-direction:column;gap:10px;margin:18px 0;text-align:left}
@@ -48,3 +50,12 @@ small,.kpi-label,.subtitle,.eyebrow,.panel-heading p,.panel-heading>small,.proje
 .changelog-entry:last-child{border-bottom:none}
 .changelog-entry h3{font-size:14px;margin-bottom:6px}
 .changelog-entry h3 small{color:var(--ink-3);font-weight:normal;margin-left:6px}
+/* V1.0.0 软件更新提醒 */
+.update-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--cyan);flex:0 0 auto;box-shadow:0 0 0 2px rgba(76,139,160,.18)}
+.nav button .update-dot{margin-left:auto}
+.sidebar-version{display:flex;flex-direction:column;gap:7px;padding:0 3px 13px;justify-content:flex-end;min-height:58px}
+.sidebar-ver-text{color:#8b918b;font-size:11px;letter-spacing:.2px}
+.update-entry{display:flex;align-items:center;gap:8px;text-align:left;min-height:0;padding:7px 10px;font-size:13px;color:#2f5a4b;background:#e9f4ef;border:1px solid #bcd8cb;border-radius:8px;white-space:nowrap}
+.update-entry:hover{background:#ddeee7;border-color:#a9cdbe}
+.update-entry .update-dot{box-shadow:none}
+.modal.update-modal{width:min(700px,calc(100vw - 90px))}

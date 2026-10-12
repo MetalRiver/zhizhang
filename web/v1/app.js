@@ -33,6 +33,39 @@ const firstScanVerdict=(result)=>{
   return 'retry-error';
 };
 /* firstScanVerdict:end */
+/* updateNotice:begin（纯函数，供 Node 行为测试驱动；勿内联回逻辑） */
+/* 语义化版本比较：先比点分数值，release 高于同号 prerelease。 */
+const cmpSemver=(a,b)=>{
+  const A=String(a||'').split('-'),B=String(b||'').split('-');
+  const na=A[0].split('.').map(x=>parseInt(x,10)||0);
+  const nb=B[0].split('.').map(x=>parseInt(x,10)||0);
+  for(let i=0;i<3;i++){const x=na[i]||0,y=nb[i]||0;if(x!==y)return x<y?-1:1;}
+  const ra=A[1]||'',rb=B[1]||'';
+  if(ra===rb)return 0;
+  if(!ra)return 1;        /* 正式版 > 预发布 */
+  if(!rb)return -1;
+  return ra<rb?-1:1;
+};
+/* 是否应在启动时自动检查：开关开启且距上次检查 ≥ 24 小时。 */
+const shouldAutoCheck=(desktop,nowMs)=>{
+  if(!desktop||desktop.auto_check_update!==true)return false;
+  const last=Number(desktop.last_update_check_ms||0);
+  return (Number(nowMs)||0)-last>=24*60*60*1000;
+};
+/* 由「当前版本 / 已存提醒 / 本次检查结果」推出提醒状态。
+   checkResult 为 null 表示本次没有新结果（例如网络失败）→ 沿用已存提醒。
+   返回 {notice,clear}：notice=要展示的可用版本（null=不展示）；clear=应清除已存提醒。 */
+const updateNoticeState=(current,storedVersion,checkResult)=>{
+  const cur=String(current||'');
+  if(checkResult){
+    const v=checkResult.status==='available'?String(checkResult.version||''):'';
+    if(v&&(!cur||cmpSemver(v,cur)>0))return {notice:v,clear:false};
+    return {notice:null,clear:true};
+  }
+  if(storedVersion&&(!cur||cmpSemver(storedVersion,cur)>0))return {notice:String(storedVersion),clear:false};
+  return {notice:null,clear:!!storedVersion};
+};
+/* updateNotice:end */
 const icon=n=>`<span class="icon" aria-hidden="true"><svg viewBox="0 0 24 24">${icons[n]||icons.folder}</svg></span>`;
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fmt=n=>n==null?'暂无具体用量':n>=1e9?(n/1e9).toFixed(2)+'B':n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(1)+'K':n.toLocaleString('en-US');
@@ -52,6 +85,7 @@ const state={
   overlay:null,origin:'overview',settingTab:'common',disclosures:{},
   desktop:null,migration:null,migrationError:null,storagePath:null,
   update:null,whatsNewShown:false,whatsNewData:null,changelogData:null,
+  updateAvailable:null,updateNotes:'',
   onboarding:'welcome',scan:'idle',data:null,identity:null,health:null,
   discover:null,unassigned:[],replayCount:null,pending:null,moveIds:[],
   error:null,booted:false
@@ -98,6 +132,41 @@ const queryURL=over=>{
   return '/api/v1/query?'+q.toString();
 };
 async function loadIdentity(){try{state.identity=await api('/api/v1/identity');}catch(e){state.identity=null;}}
+/* ---------------- 软件更新提醒（V1.0.0） ---------------- */
+function currentVersion(){return (state.identity&&state.identity.app_version)||(state.desktop&&state.desktop.last_seen_version)||'';}
+/* 由一次真实检查结果更新提醒状态并落库（时间 + 版本）；手动/自动检查共用。 */
+async function applyCheckResult(r){
+  const s=updateNoticeState(currentVersion(),(state.desktop||{}).update_available_version,r);
+  state.updateAvailable=s.notice;
+  state.updateNotes=(s.notice&&r)?(r.notes||''):'';
+  try{
+    if(r){await tauriInvoke('record_update_check',{availableVersion:s.notice||null,notes:state.updateNotes||null});}
+    else if(s.clear){await tauriInvoke('clear_update_notice');}
+  }catch(e){}
+  try{state.desktop=await tauriInvoke('get_desktop_state');}catch(e){}
+}
+/* 启动时从已存状态恢复提醒；当前版本已不低于提醒版本则清除（升级成功后消失）。 */
+function initUpdateNotice(){
+  const d=state.desktop;
+  const s=updateNoticeState(currentVersion(),d&&d.update_available_version,null);
+  state.updateAvailable=s.notice;
+  state.updateNotes=(s.notice&&d)?(d.update_available_notes||''):'';
+  if(s.clear){tauriInvoke('clear_update_notice').catch(()=>{});}
+}
+/* 启动时后台检查（仅在用户开启且距上次 ≥24h）；任何失败静默，不影响账本使用。 */
+async function maybeAutoCheckUpdate(){
+  if(!window.__TAURI__)return;
+  if(!shouldAutoCheck(state.desktop,Date.now()))return;
+  try{
+    const r=await tauriInvoke('check_for_update');
+    await applyCheckResult(r);
+    render();
+  }catch(e){/* 网络异常：保持现状，不自动下载、不弹窗、不干扰使用 */}
+}
+function sidebarUpdate(){
+  const cur=currentVersion(),ver=state.updateAvailable;
+  return `<div class="sidebar-version">${cur?`<small class="sidebar-ver-text">版本 ${esc(cur)}</small>`:''}${ver?`<button class="update-entry" data-action="open-about-update" title="发现新版本 ${esc(ver)}"><i class="update-dot" aria-hidden="true"></i>发现新版本 ${esc(ver)}</button>`:''}</div>`;
+}
 async function loadHealth(){try{state.health=await api('/api/v1/health');}catch(e){state.health=null;}}
 async function loadDiscover(force){
   if(state.discover&&!force)return state.discover;
@@ -177,7 +246,7 @@ function info(kind='cost'){
 function emptyCard(title,description,action='clear-filters',cta='查看全部历史',kind='folder'){return `<section class="panel empty state-card"><div class="state-icon">${icon(kind)}</div><h2>${title}</h2><p>${description}</p><button class="primary" data-action="${action}">${cta}</button></section>`}
 function statusNotice(title,description,action,cta,type='partial',glyph='shield'){return `<div class="state-notice ${type}" role="status">${icon(glyph)}<div><strong>${title}</strong><p>${description}</p></div><button class="text-button" data-action="${action}">${cta} →</button></div>`}
 function brand(){return `<div class="brand"><img class="brand-logo" src="/assets/art/brand/zhizhang-128.png" alt="智账"><div><strong>智账</strong><small>PathOrbit AI Ledger</small></div></div>`}
-function shell(content){return `<div class="shell"><aside class="sidebar">${brand()}<div class="nav-label">我的 AI 使用</div><nav class="nav" aria-label="主要导航">${[['overview','总览'],['explore','探索'],['settings','设置']].map(([id,name])=>`<button data-nav="${id}" class="${state.view===id?'active':''}">${icon(id)}${name}</button>`).join('')}</nav><div class="sidebar-bottom"><div class="local">${icon('shield')} 数据只保存在本机</div><p>用过的 AI，<br>慢慢成为自己的账本。</p><small>工具清理历史后，<br>已记账的记录依然保留。</small></div></aside><main class="main ${state.view==='settings'?'settings-main':''}">${content}</main></div>`}
+function shell(content){return `<div class="shell"><aside class="sidebar">${brand()}<div class="nav-label">我的 AI 使用</div><nav class="nav" aria-label="主要导航">${[['overview','总览'],['explore','探索'],['settings','设置']].map(([id,name])=>{const dot=id==='settings'&&state.updateAvailable?`<i class="update-dot" aria-hidden="true"></i>`:'';return `<button data-nav="${id}" class="${state.view===id?'active':''}"${dot?` title="发现新版本 ${esc(state.updateAvailable)}"`:''}>${icon(id)}${name}${dot}</button>`}).join('')}</nav><div class="sidebar-bottom">${sidebarUpdate()}<div class="local">${icon('shield')} 数据只保存在本机</div><p>用过的 AI，<br>慢慢成为自己的账本。</p><small>工具清理历史后，<br>已记账的记录依然保留。</small></div></aside><main class="main ${state.view==='settings'?'settings-main':''}">${content}</main></div>`}
 function lastUpdateText(){
   const lr=state.health&&(state.health.last_run||{});
   if(state.scan==='done')return '刚刚更新';
@@ -361,7 +430,9 @@ function settingsBody(tab){
   }
   if(tab==='about'){
     const id=state.identity||{};
-    return `<div class="settings-about">${brand()}<p>你的本地 AI 使用账本。看清每个项目、每场对话用了多少 AI。</p></div><dl class="settings-about-facts"><div><dt>版本</dt><dd>${esc(id.app_version||'暂时无法识别')}</dd></div></dl><div class="settings-update-actions"><button class="primary" data-action="check-update" ${state.update&&state.update.phase==='checking'?'disabled':''}>${state.update&&state.update.phase==='checking'?'正在检查…':'检查更新'}</button><button data-action="show-changelog">更新记录</button></div><p class="settings-footnote">检查更新只在你点击时进行；不会自动联网，也不会上传任何账本信息。构建与数据格式信息可在高级中查看。</p>`;
+    const dsk=state.desktop;
+    const autoRow=dsk?settingsRow('自动检查软件更新','启动时自动检查新版本，不会自动下载或安装。可随时关闭。默认开启。',switchBtn(dsk.auto_check_update===true,'toggle-auto-check-update','自动检查软件更新')):'';
+    return `<div class="settings-about">${brand()}<p>你的本地 AI 使用账本。看清每个项目、每场对话用了多少 AI。</p></div><dl class="settings-about-facts"><div><dt>版本</dt><dd>${esc(id.app_version||'暂时无法识别')}</dd></div></dl><div class="settings-update-actions"><button class="primary" data-action="check-update" ${state.update&&state.update.phase==='checking'?'disabled':''}>${state.update&&state.update.phase==='checking'?'正在检查…':'检查更新'}</button><button data-action="show-changelog">更新记录</button></div>`+(autoRow?settingsGroup('软件更新',autoRow):'')+`<p class="settings-footnote">检查更新会连接 GitHub 获取版本信息；不会上传你的账本、AI 对话或使用记录（常规网络连接本身的信息除外）。构建与数据格式信息可在高级中查看。</p>`;
   }
   const id=state.identity||{};
   const pm=(state.data&&state.data.aggregate)||{};
@@ -432,11 +503,11 @@ function migrationFailedOverlay(){
 /* RC.3 更新器 / 更新记录 / What's New（§40-59） */
 function updateOverlay(){
   const u=state.update;if(!u)return '';
-  if(u.phase==='failed')return `<div class="scrim" data-action="update-dismiss"></div><section class="modal" role="dialog" aria-modal="true" aria-label="更新失败"><div class="drawer-head"><h2>更新失败</h2><p class="subtitle">当前版本不受影响，可以继续正常使用。</p></div><div class="modal-body"><p class="quiet-explanation">${esc(u.message||'更新过程中出现问题，已安全停止。')}</p>${(u.message||'').includes('签名')?'<p class="quiet-explanation">为保护你的数据，签名验证失败的更新包已被拒绝安装，且不提供跳过验证的选项。</p>':''}</div><div class="modal-actions"><div class="inline"><button class="primary" data-action="update-dismiss">知道了</button></div></div></section>`;
+  if(u.phase==='failed')return `<div class="scrim" data-action="update-dismiss"></div><section class="modal update-modal" role="dialog" aria-modal="true" aria-label="更新失败"><div class="drawer-head"><h2>更新失败</h2><p class="subtitle">当前版本不受影响，可以继续正常使用。</p></div><div class="modal-body"><p class="quiet-explanation">${esc(u.message||'更新过程中出现问题，已安全停止。')}</p>${(u.message||'').includes('签名')?'<p class="quiet-explanation">为保护你的数据，签名验证失败的更新包已被拒绝安装，且不提供跳过验证的选项。</p>':''}</div><div class="modal-actions"><div class="inline"><button class="primary" data-action="update-dismiss">知道了</button></div></div></section>`;
   if(u.phase==='available'||u.phase==='downloading'){
     const p=u.progress;const pct=p&&p.total?Math.min(100,Math.round(p.downloaded/p.total*100)):null;
     const notes=String(u.notes||'').split(/\r?\n/).filter(Boolean).map(l=>`<li>${esc(l)}</li>`).join('');
-    return `<div class="scrim" data-action="update-dismiss"></div><section class="modal" role="dialog" aria-modal="true" aria-label="发现新版本"><div class="drawer-head"><h2>发现新版本 ${esc(u.version)}</h2><p class="subtitle">当前版本 ${esc(u.current||'')} · 更新内容：</p></div><div class="modal-body">${notes?`<ul class="whatsnew-list">${notes}</ul>`:''}${u.phase==='downloading'?`<div class="scan-progress"><i></i></div><p class="quiet-explanation">${pct!=null?`已下载 ${pct}%（签名验证将在下载完成后自动进行）`:'正在连接更新源…'}</p>`:'<p class="quiet-explanation">下载完成后会自动验证数字签名；验证通过才会安装，验证失败将拒绝安装。</p>'}</div><div class="modal-actions"><div class="inline"><button data-action="update-dismiss" ${u.phase==='downloading'?'disabled':''}>以后再说</button>${u.phase==='available'?`<button class="primary" data-action="download-update">下载更新</button>`:''}</div></div></section>`;
+    return `<div class="scrim" data-action="update-dismiss"></div><section class="modal update-modal" role="dialog" aria-modal="true" aria-label="发现新版本"><div class="drawer-head"><h2>发现新版本 ${esc(u.version)}</h2><p class="subtitle">当前版本 ${esc(u.current||'')} · 更新内容：</p></div><div class="modal-body">${notes?`<ul class="whatsnew-list">${notes}</ul>`:''}${u.phase==='downloading'?`<div class="scan-progress"><i></i></div><p class="quiet-explanation">${pct!=null?`已下载 ${pct}%（签名验证将在下载完成后自动进行）`:'正在连接更新源…'}</p>`:'<p class="quiet-explanation">下载完成后会自动验证数字签名；验证通过才会安装，验证失败将拒绝安装。</p>'}</div><div class="modal-actions"><div class="inline"><button data-action="update-dismiss" ${u.phase==='downloading'?'disabled':''}>以后再说</button>${u.phase==='available'?`<button class="primary" data-action="download-update">下载更新</button>`:''}</div></div></section>`;
   }
   return '';
 }
@@ -667,6 +738,7 @@ document.addEventListener('click',async e=>{
     state.update={phase:'checking'};render();
     try{
       const r=await tauriInvoke('check_for_update');
+      await applyCheckResult(r);
       if(r.status==='not_configured'){state.update=null;render();
         toast('更新源未配置：本版本暂未接入在线更新通道，功能不受影响');}
       else if(r.status==='up_to_date'){state.update=null;render();toast('当前已是最新版本');}
@@ -685,6 +757,15 @@ document.addEventListener('click',async e=>{
       state.update={phase:'failed',message:err&&err.message?err.message:String(err)};
       render();}}
   else if(act==='update-dismiss'){state.update=null;closeOverlay();render();}
+  else if(act==='open-about-update'){
+    state.settingTab='about';nav('settings');
+    if(state.updateAvailable){state.update={phase:'available',version:state.updateAvailable,current:currentVersion(),notes:state.updateNotes||''};state.overlay='update';render();}}
+  else if(act==='toggle-auto-check-update'){
+    const dsk=state.desktop;if(!dsk)return;
+    const on=dsk.auto_check_update!==true;
+    try{await tauriInvoke('set_auto_check_update',{enable:on});await loadDesktop();render();
+      if(on)maybeAutoCheckUpdate();   /* 关闭→开启：立即做一次受 24h 节流控制的检查，无需重启 */
+    }catch(err){toast('设置未保存，请重试');}}
   else if(act==='show-changelog'){
     try{const cl=await api('/v1/changelog.json');state.changelogData=cl;state.overlay='changelog';render();}
     catch(err){toast('暂时无法读取更新记录');}}
@@ -766,6 +847,7 @@ try{const ev=window.__TAURI__&&window.__TAURI__.event;
 (async function boot(){
   render();
   await Promise.all([loadIdentity(),loadHealth(),loadDiscover(),loadDesktop()]);  // 桌面壳状态失败 = 浏览器开发态
+  initUpdateNotice();
   await loadUnassigned();
   await loadReplayCount();
     // 空账本（首次使用）：overview 无数据且无任何会话 → First Run。
@@ -783,4 +865,5 @@ try{const ev=window.__TAURI__&&window.__TAURI__.event;
     else state.fatal=e.message;
   }
   render();
+  maybeAutoCheckUpdate();   // 启动时后台检查（仅在用户开启且距上次 ≥24h）；不阻塞首屏
 })();

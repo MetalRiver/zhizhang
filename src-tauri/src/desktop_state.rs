@@ -31,6 +31,25 @@ pub struct DesktopState {
     /// 升级后 What's New 只显示一次的游标。
     #[serde(default)]
     pub last_seen_version: Option<String>,
+    /// V1.0.0：「启动时自动检查软件更新」开关。**默认开启**（产品决策）。
+    /// 注意：这里刻意用 `default = "auto_check_true"` 而非普通 `#[serde(default)]`——
+    /// 后者对 bool 会给 `false`，会把旧 RC.7 状态文件（无该字段）误判成关闭。
+    #[serde(default = "auto_check_true")]
+    pub auto_check_update: bool,
+    /// V1.0.0：最近一次软件更新检查时间（Unix 毫秒，UTC），用于 24 小时节流。
+    #[serde(default)]
+    pub last_update_check_ms: Option<u64>,
+    /// V1.0.0：已知可用的新版本号（侧边栏提醒用）；当前版本 >= 它时清除。
+    #[serde(default)]
+    pub update_available_version: Option<String>,
+    /// V1.0.0：对应的更新说明（供提醒入口展示，可为空）。
+    #[serde(default)]
+    pub update_available_notes: Option<String>,
+}
+
+/// 缺失该字段时的默认值：开启（用户显式保存的 false 不受影响）。
+fn auto_check_true() -> bool {
+    true
 }
 
 impl Default for DesktopState {
@@ -40,6 +59,10 @@ impl Default for DesktopState {
             first_run_complete: false,
             close_behavior: None,
             last_seen_version: None,
+            auto_check_update: true,
+            last_update_check_ms: None,
+            update_available_version: None,
+            update_available_notes: None,
         }
     }
 }
@@ -206,5 +229,49 @@ mod tests {
         assert!(before.contains("\"close_behavior\": null"));
         assert!(after.contains("\"close_behavior\": \"exit\""));
         let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    }
+
+    #[test]
+    fn v1_update_fields_backcompat_and_roundtrip() {
+        // 旧版文件（无 V1.0.0 字段）→ 开关默认开启、无提醒
+        let p = tmp_path("v1-backcompat");
+        std::fs::write(
+            &p,
+            r#"{"schema_version":1,"first_run_complete":true,
+                "close_behavior":"background","last_seen_version":"0.11.0-rc.7"}"#,
+        )
+        .unwrap();
+        let old = read_from(&p);
+        assert!(old.auto_check_update, "缺字段必须默认开启（产品决策）");
+        assert_eq!(old.last_update_check_ms, None);
+        assert_eq!(old.update_available_version, None);
+        assert_eq!(old.update_available_notes, None);
+        // 写入并回读保持
+        let mut s = old.clone();
+        s.auto_check_update = false;
+        s.last_update_check_ms = Some(1_700_000_000_000);
+        s.update_available_version = Some("1.0.0".into());
+        s.update_available_notes = Some("notes".into());
+        write_to(&p, &s).unwrap();
+        assert_eq!(read_from(&p), s);
+        let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    }
+
+    #[test]
+    fn v1_auto_check_defaults_true_and_respects_explicit_false() {
+        // 纯缺失文件 → 默认开启
+        let p = tmp_path("v1-missing-file");
+        assert!(read_from(&p).auto_check_update, "缺失文件应默认开启");
+        assert!(DesktopState::default().auto_check_update);
+        // 旧 RC.7 配置（无该字段）→ 默认 true
+        let p2 = tmp_path("v1-legacy-true");
+        std::fs::write(&p2, r#"{"schema_version":1,"close_behavior":"background"}"#).unwrap();
+        assert!(read_from(&p2).auto_check_update, "旧配置缺字段必须得到 true");
+        // 用户明确保存 false → 重启仍为 false，不得被默认覆盖成 true
+        let mut s = read_from(&p2);
+        s.auto_check_update = false;
+        write_to(&p2, &s).unwrap();
+        assert!(!read_from(&p2).auto_check_update, "显式 false 必须被尊重");
+        let _ = std::fs::remove_dir_all(p2.parent().unwrap());
     }
 }
