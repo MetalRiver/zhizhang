@@ -46,7 +46,7 @@ $confPath  = Join-Path $repo 'src-tauri\tauri.conf.json'
 $pkgPath   = Join-Path $repo 'package.json'
 $tauriCli  = Join-Path $repo 'node_modules\@tauri-apps\cli\tauri.js'
 $nsisDir   = Join-Path $repo 'src-tauri\target\release\bundle\nsis'
-$appVer    = '0.11.0-rc.7'
+$appVer    = '1.0.0'
 
 function Clear-SigningEnv {
   Remove-Item Env:\TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
