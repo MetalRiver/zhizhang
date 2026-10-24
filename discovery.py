@@ -104,12 +104,29 @@ def load_catalog(path=None):
 
 
 def _app_version():
+    """当前应用版本（缓存失效的版本腿，frozen 下必须真实可读）。
+
+    V1.1 修复：frozen 打包形态里 VERSION 随包在 bundled resource root
+    （_internal），不在 DATA_ROOT —— 此前只查 BASE/VERSION 永远落空，
+    app_version 恒为 'unknown'，升级（catalog 不变时）不再触发重发现。
+    候选顺序：BASE（dev）→ 打包资源根（frozen），与 serve._version_from_file
+    同一模式。
+    """
+    candidates = [os.path.join(BASE, 'VERSION')]
     try:
-        with open(os.path.join(BASE, 'VERSION'), encoding='utf-8') as f:
-            m = re.search(r'^version\s+(\S+)', f.read(), re.M)
-            return m.group(1) if m else 'unknown'
-    except OSError:
-        return 'unknown'
+        import paths
+        candidates.append(paths.application_resource_path('VERSION'))
+    except Exception:
+        pass
+    for p in candidates:
+        try:
+            with open(p, encoding='utf-8') as f:
+                m = re.search(r'^version\s+(\S+)', f.read(), re.M)
+                if m:
+                    return m.group(1)
+        except OSError:
+            continue
+    return 'unknown'
 
 
 def _expand_hint(hint, home=None):
@@ -944,11 +961,17 @@ def run_discovery(full=False, catalog=None, home_override=None, now=None,
             _slug(tool_hint or os.path.basename(root)), fps, catalog,
             anchored_generic=(generic_anchor_tools[tool_hint].get('adapter')
                               if tool_hint in generic_anchor_tools else None))
-        # 噪音目录：结构完全无法判定且无加密/损坏信号 → 不注册成工具。
-        # 加密 / 损坏本身是信号（可能是 AI 工具的私有存储）→ 如实登记 UNKNOWN。
-        has_signal = any(fp.get('kind') in ('opaque', 'unparseable')
+        # 噪音目录（V1.1 修正口径）：只有非结构化杂项文件（.log 等
+        # interesting_name 命中但既非 sqlite 也非 jsonl）→ 仍视为噪音丢弃；
+        # 只要存在**结构化数据存储**（可读 sqlite/jsonl 或加密/损坏），
+        # 就必须留一条记录让「已安装但暂不支持」的工具可见——
+        # 此前「可读但结构不认识」会被整条吞掉，CodeBuddy/Comate/Copilot
+        # 这类已装工具在结果里彻底消失，与产品「诚实状态」承诺相悖。
+        # UNKNOWN 从不自动入账，可见性不改变采集边界。
+        structured = any(fp.get('kind') in ('sqlite', 'jsonl',
+                                            'opaque', 'unparseable')
                          for fp in fps)
-        if status == ST_UNKNOWN and not tool_hint and not has_signal:
+        if status == ST_UNKNOWN and not tool_hint and not structured:
             continue
         name = os.path.basename(root)
         anchored = tool_hint in generic_anchor_tools

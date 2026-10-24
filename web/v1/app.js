@@ -660,11 +660,12 @@ document.addEventListener('click',async e=>{
   else if(act==='rediscover'){
     if(state.discovering)return;
     state.discovering=true;render();
+    let ok=true;
     try{state.discover=await post('/api/v1/discover/refresh',{});}
-    catch(e){if(e.status!==409)toast('重新发现失败，请稍后再试');}
+    catch(e){ok=false;if(e.status!==409)toast(`重新发现失败：${(e&&e.message)||'请稍后再试'}`);}
     state.discovering=false;render();
-    const d=state.discover||{};
-    toast(`已发现 ${d.found!=null?d.found:(d.tools||[]).length} 个 AI 工具`);}
+    if(ok){const d=state.discover||{};
+      toast(`已发现 ${d.found!=null?d.found:(d.tools||[]).length} 个 AI 工具`);}}
   else if(act==='data-folder'){
     if(window.__TAURI__&&window.__TAURI__.core){try{await window.__TAURI__.core.invoke('open_data_root');}catch(err){toast('打开数据目录失败');}}
     else toast('桌面版中可在此打开数据目录');}

@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import mimetypes
+import re
 import sqlite3
 import os
 import subprocess
@@ -519,6 +520,18 @@ def _load_json(path):
         return None
 
 
+# V1.1：对外错误信息脱敏 —— 异常文本可能携带本机绝对路径（如
+# FileNotFoundError 的文件名），API message 会直接进前端 toast，
+# 必须先剥掉盘符路径再输出；完整栈只写本地 server.log。
+_ABS_PATH_RE = re.compile(r'[A-Za-z]:\\[^\s"\'\)]*')
+
+
+def _sanitize_error_text(exc, limit=200):
+    s = _ABS_PATH_RE.sub('…', str(exc or ''))
+    s = s.replace('\r', ' ').replace('\n', ' ').strip()
+    return s[:limit]
+
+
 def board_path():
     return os.path.join(HERE, 'usage-board.json')
 
@@ -951,9 +964,12 @@ class LedgerHandler(BaseHTTPRequestHandler):
                 rep = _disc.run_discovery(full=False)
                 return self._json(200, _disc.public_payload(rep))
             except Exception as exc:
-                slog('discover 异常：%s' % type(exc).__name__)
+                import traceback
+                slog('discover 异常：%s' % traceback.format_exc(limit=6))
                 return self._err(500, 'discover_failed',
-                                 '发现失败：%s' % type(exc).__name__)
+                                 '发现失败：%s：%s'
+                                 % (type(exc).__name__,
+                                    _sanitize_error_text(exc) or '未知原因'))
 
         if path.startswith('/api/v1/sessions/'):
             segs = [unquote(x) for x in path.split('/') if x]
@@ -1422,9 +1438,14 @@ class LedgerHandler(BaseHTTPRequestHandler):
             rep = _disc.run_discovery(full=True)
             return self._json(200, _disc.public_payload(rep))
         except Exception as exc:
-            slog('discover refresh 异常：%s' % type(exc).__name__)
+            # V1.1：错误反馈不再只有异常类型名 —— 脱敏后的具体原因随
+            # message 透出（前端 toast 直接可见），完整栈留 server.log。
+            import traceback
+            slog('discover refresh 异常：%s' % traceback.format_exc(limit=6))
             return self._err(500, 'discover_failed',
-                             '重新发现失败：%s' % type(exc).__name__)
+                             '重新发现失败：%s：%s'
+                             % (type(exc).__name__,
+                                _sanitize_error_text(exc) or '未知原因'))
 
     def _post_scan(self):
         self._check_origin()
