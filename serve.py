@@ -634,14 +634,18 @@ def identity_payload():
 
 # ---------------------------------------------------------------- 扫描编排
 
-def run_scan_once():
+def run_scan_once(trigger='api'):
     """一次完整编排：发现 → 增量采集 → board → health → run-state。
+
+    trigger：'api'（HTTP 触发，默认）或 'scheduled'（V1.1 后端自动同步
+    调度器）。只影响 run-state/auto.log 的溯源标记与编排参数，不改变
+    采集路径本身 —— 调度器与手动更新走**同一条**编排，无第二套采集逻辑。
 
     Round 7 隔离设计：以**子进程**运行被服务根目录的 autopilot.py
     （fresh interpreter → 必然加载本根目录的 ledger/autopilot，
     杜绝任何模块缓存把写入引向别的账本）。编排复用 autopilot 全链路：
       - 不做价格同步（--no-pricing，唯一联网层被禁用）
-      - trigger='api'（run-state/日志可溯源）
+      - trigger 随调用方传入（run-state/日志可溯源）
       - 跨进程扫描锁由子进程内的 ledger.acquire_scan_lock 原子获取；
         锁被 scheduled/manual writer 占用时子进程 partial 退出 → 本函数映射为 409
 
@@ -656,7 +660,7 @@ def run_scan_once():
         _old_argv = sys.argv
         code = 0
         try:
-            sys.argv = ['autopilot', 'auto', '--trigger', 'api', '--no-pricing']
+            sys.argv = ['autopilot', 'auto', '--trigger', trigger, '--no-pricing']
             _ap.main()
         except SystemExit as e:
             code = e.code if isinstance(e.code, int) else 0
@@ -667,8 +671,8 @@ def run_scan_once():
         finally:
             sys.argv = _old_argv
         rs = _load_json(paths.run_state_path()) or {}
-        slog('scan(frozen) 退出码=%s status=%s inserted=%s'
-             % (code, rs.get('status'), rs.get('events_inserted', 0)))
+        slog('scan(frozen) trigger=%s 退出码=%s status=%s inserted=%s'
+             % (trigger, code, rs.get('status'), rs.get('events_inserted', 0)))
         if rs.get('scan_skipped_lock'):
             return {'ok': False, 'status': rs.get('status'),
                     'scan_in_progress': True,
@@ -694,12 +698,12 @@ def run_scan_once():
         return {'ok': False, 'error': 'autopilot_missing',
                 'message': '被服务目录缺少 autopilot.py'}
     r = subprocess.run(
-        [exe, script, 'auto', '--trigger', 'api', '--no-pricing'],
+        [exe, script, 'auto', '--trigger', trigger, '--no-pricing'],
         cwd=HERE, capture_output=True, text=True, encoding='utf-8',
         errors='replace', timeout=900)
     rs = _load_json(os.path.join(HERE, 'run-state.json')) or {}
-    slog('scan 子进程退出码=%s status=%s inserted=%s'
-         % (r.returncode, rs.get('status'), rs.get('events_inserted', 0)))
+    slog('scan 子进程 trigger=%s 退出码=%s status=%s inserted=%s'
+         % (trigger, r.returncode, rs.get('status'), rs.get('events_inserted', 0)))
     if rs.get('scan_skipped_lock'):
         return {'ok': False, 'status': rs.get('status'),
                 'scan_in_progress': True,
@@ -716,6 +720,270 @@ def run_scan_once():
         'health': (rs.get('health') or {}).get('status'),
         'errors': (rs.get('errors') or [])[:5],
     }
+
+
+# ---------------------------------------------------------------- V1.1 后端自动同步调度器
+#
+# 目标：桌面后端常驻期间按用户设定的间隔自动增量同步（默认 30 分钟，
+# 设置页显式启用）。设计原则 —— **复用，不新建**：
+#   - 采集走同一条 run_scan_once 编排（trigger='scheduled'），账本写入、
+#     SQLite 去重、原子产物全部沿用 autopilot/ledger 既有链路；
+#   - 进程内互斥复用 SCAN_LOCK/SCAN_STATE（与 POST /api/v1/scan 同锁）；
+#     跨进程锁仍由子进程/in-process autopilot 内的 ledger 扫描锁承担；
+#   - 维护静默复用 MAINTENANCE：quiesce 期间顺延不抢跑，resume 后自动恢复；
+#   - 状态持久化在 auto-schedule.json（schema v3，method='backend'）——
+#     与 install-auto 的 Windows 计划任务共用文件名、区分 method，
+#     并已在 MIGRATION_DURABLE 集合内（升级/迁移自动搬运）。
+# 退出/升级：线程为 daemon，进程退出即止；重启后按持久化配置继续。
+# 休眠恢复：按墙钟判到期，系统唤醒后下一个 tick 立即补跑一次（不追多次）。
+
+SCHED_SCHEMA_VERSION = 3
+SCHED_DEFAULT_INTERVAL = 30
+SCHED_MIN_INTERVAL = 5
+SCHED_MAX_INTERVAL = 1440
+SCHED_POSTPONE_MINUTES = 1     # 互斥/静默顺延后的重试间隔
+
+SCHEDULER = {'thread': None, 'stop': False, 'wake': threading.Event()}
+
+
+def _sync_schedule_path():
+    # 动态读 HERE：frozen main() 会在启动时把 HERE 重绑到 DATA_ROOT
+    # （与 server-state/server.log 同一重绑契约），此处不得在 import 期固化。
+    return os.path.join(HERE, 'auto-schedule.json')
+
+
+def _load_sync_cfg():
+    return _load_json(_sync_schedule_path()) or {}
+
+
+def _save_sync_cfg(cfg):
+    p = _sync_schedule_path()
+    tmp = p + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, p)
+
+
+def _iso_now():
+    import datetime as _dt
+    return _dt.datetime.now().isoformat(timespec='seconds')
+
+
+def _parse_iso(s):
+    import datetime as _dt
+    if not s or not isinstance(s, str):
+        return None
+    try:
+        return _dt.datetime.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def _cfg_interval(cfg):
+    try:
+        v = int(cfg.get('interval_minutes') or SCHED_DEFAULT_INTERVAL)
+    except (TypeError, ValueError):
+        return SCHED_DEFAULT_INTERVAL
+    return min(max(v, SCHED_MIN_INTERVAL), SCHED_MAX_INTERVAL)
+
+
+def sync_schedule_status():
+    """调度器对外状态（GET /api/v1/sync-schedule 载荷）。"""
+    cfg = _load_sync_cfg()
+    enabled = bool(cfg.get('enabled'))
+    return {
+        'available': True,
+        'enabled': enabled,
+        'interval_minutes': cfg.get('interval_minutes'),
+        'method': 'backend' if enabled else None,
+        'installed_at': cfg.get('installed_at') if enabled else None,
+        'next_run_at': cfg.get('next_run_at') if enabled else None,
+        'last_run_at': cfg.get('last_run_at'),
+        'last_status': cfg.get('last_status'),
+        'last_trigger': cfg.get('last_trigger'),
+        'last_errors': list(cfg.get('last_errors') or []),
+        'maintenance_quiesced': bool(MAINTENANCE['quiesced']),
+        'scan_running': bool(SCAN_STATE['running']),
+        'schema_version': SCHED_SCHEMA_VERSION,
+    }
+
+
+def apply_sync_schedule(enabled=None, interval_minutes=None):
+    """设置自动同步（POST 载荷语义）。返回 (ok, status_dict_or_错误信息)。
+
+    - enabled=true：记录 installed_at=now，next_run_at=now（调度器 1 秒内
+      接手，立即做首次同步 —— 与 install-auto 注册后自检同语义）；
+    - enabled=false：停用，next_run_at 清空，last_* 保留供展示；
+    - 仅改 interval：启用中则从现在按新间隔重排。
+    校验失败返回 (False, 原因字符串)。
+    """
+    import datetime as _dt
+    if enabled is None and interval_minutes is None:
+        return False, '缺少 enabled 或 interval_minutes'
+    if enabled is not None and not isinstance(enabled, bool):
+        return False, 'enabled 必须是布尔值'
+    iv = None
+    if interval_minutes is not None:
+        if isinstance(interval_minutes, bool) or not isinstance(interval_minutes, int):
+            return False, 'interval_minutes 必须是整数（%d–%d 分钟）' % (
+                SCHED_MIN_INTERVAL, SCHED_MAX_INTERVAL)
+        if not (SCHED_MIN_INTERVAL <= interval_minutes <= SCHED_MAX_INTERVAL):
+            return False, 'interval_minutes 超出范围（%d–%d 分钟）' % (
+                SCHED_MIN_INTERVAL, SCHED_MAX_INTERVAL)
+        iv = interval_minutes
+    cfg = _load_sync_cfg()
+    # 只保留合法基线字段，坏文件自愈为默认
+    base = {k: cfg.get(k) for k in (
+        'last_run_at', 'last_status', 'last_errors', 'last_trigger',
+        'last_exit_code') if cfg.get(k) is not None}
+    now_s = _iso_now()
+    new_cfg = {'schema_version': SCHED_SCHEMA_VERSION}
+    new_cfg.update(base)
+    if iv is not None:
+        new_cfg['interval_minutes'] = iv
+    else:
+        new_cfg['interval_minutes'] = _cfg_interval(cfg)
+    if enabled is True:
+        new_cfg['enabled'] = True
+        new_cfg['method'] = 'backend'
+        new_cfg['task_name'] = None
+        new_cfg['installed_at'] = now_s
+        new_cfg['next_run_at'] = now_s        # 立即首跑（异步接手）
+    elif enabled is False:
+        new_cfg['enabled'] = False
+        new_cfg['method'] = None
+        new_cfg['installed_at'] = None
+        new_cfg['next_run_at'] = None
+    else:
+        # 仅改间隔：保持当前启停状态
+        new_cfg['enabled'] = bool(cfg.get('enabled'))
+        new_cfg['method'] = 'backend' if cfg.get('enabled') else None
+        new_cfg['installed_at'] = cfg.get('installed_at') if cfg.get('enabled') else None
+        if cfg.get('enabled'):
+            new_cfg['next_run_at'] = _iso(
+                _dt.datetime.now()
+                + _dt.timedelta(minutes=new_cfg['interval_minutes']))
+        else:
+            new_cfg['next_run_at'] = None
+    _save_sync_cfg(new_cfg)
+    slog('auto-sync 配置更新：enabled=%s interval=%s' % (
+        new_cfg.get('enabled'), new_cfg.get('interval_minutes')))
+    return True, sync_schedule_status()
+
+
+def _iso(dt):
+    return dt.isoformat(timespec='seconds')
+
+
+def _record_sync_result(cfg, started_at_iso, status, errors, exit_code=None):
+    """调度运行结果落盘（原子写），并排下一次运行。"""
+    import datetime as _dt
+    cfg = dict(cfg)
+    cfg['last_run_at'] = started_at_iso
+    cfg['last_status'] = status
+    cfg['last_errors'] = [str(e)[:200] for e in (errors or [])][:5]
+    cfg['last_trigger'] = 'scheduled'
+    if exit_code is not None:
+        cfg['last_exit_code'] = exit_code
+    if str(status).startswith('postponed'):
+        delay = _dt.timedelta(minutes=SCHED_POSTPONE_MINUTES)
+    else:
+        delay = _dt.timedelta(minutes=_cfg_interval(cfg))
+    cfg['next_run_at'] = _iso(_dt.datetime.now() + delay)
+    _save_sync_cfg(cfg)
+    slog('auto-sync %s：%s（下次 %s）' % (
+        status, (cfg['last_errors'][0] if cfg['last_errors'] else 'ok'),
+        cfg['next_run_at']))
+
+
+def _run_scheduled_sync(cfg, now=None):
+    """到点执行一次自动同步（全部守卫通过后走 run_scan_once）。"""
+    import datetime as _dt
+    now = now or _dt.datetime.now()
+    started_iso = _iso(now)
+    if MAINTENANCE['quiesced']:
+        _record_sync_result(cfg, started_iso, 'postponed_maintenance',
+                            ['账本维护静默中（迁移/收尾），本轮自动同步顺延'])
+        return 'postponed'
+    if SCAN_STATE['running'] or not SCAN_LOCK.acquire(blocking=False):
+        _record_sync_result(cfg, started_iso, 'postponed_busy',
+                            ['已有扫描正在进行，本轮自动同步顺延'])
+        return 'postponed'
+    try:
+        SCAN_STATE['running'] = True
+        result = run_scan_once(trigger='scheduled')
+    except Exception as exc:
+        _record_sync_result(cfg, started_iso, 'failed',
+                             ['自动同步编排异常：%s' % _sanitize_error_text(exc)])
+        return 'ran'
+    finally:
+        SCAN_STATE['running'] = False
+        SCAN_LOCK.release()
+    if result.get('scan_in_progress'):
+        # 跨进程锁被外部 writer 持有 —— 顺延，不算失败
+        _record_sync_result(cfg, started_iso, 'postponed_busy',
+                            (result.get('errors') or
+                             ['扫描锁被其它进程占用，本轮自动同步顺延'])[:5])
+        return 'postponed'
+    status = result.get('status') or ('success' if result.get('ok') else 'failed')
+    _record_sync_result(cfg, started_iso, status,
+                        (result.get('errors') or [])[:5],
+                        exit_code=result.get('exit_code'))
+    return 'ran'
+
+
+def _scheduler_tick(now=None):
+    """调度器单步（可独立调用，便于确定性测试）。"""
+    import datetime as _dt
+    cfg = _load_sync_cfg()
+    if not cfg.get('enabled'):
+        return 'idle'
+    now = now or _dt.datetime.now()
+    nxt = _parse_iso(cfg.get('next_run_at'))
+    if nxt is None:
+        # 启用但缺下次时间（旧配置/手改文件）→ 从现在起按间隔自愈重排
+        _save_sync_cfg({**cfg, 'next_run_at': _iso(
+            now + _dt.timedelta(minutes=_cfg_interval(cfg)))})
+        return 'wait'
+    if now < nxt:
+        return 'wait'
+    return _run_scheduled_sync(cfg, now)
+
+
+def _scheduler_loop():
+    while not SCHEDULER['stop']:
+        try:
+            _scheduler_tick()
+        except Exception:
+            import traceback
+            slog('auto-sync tick 异常：%s'
+                 % traceback.format_exc(limit=4).splitlines()[-1])
+        SCHEDULER['wake'].wait(1.0)
+        SCHEDULER['wake'].clear()
+
+
+def start_scheduler():
+    if SCHEDULER.get('thread') and SCHEDULER['thread'].is_alive():
+        return SCHEDULER['thread']
+    SCHEDULER['stop'] = False
+    SCHEDULER['wake'].clear()
+    t = threading.Thread(target=_scheduler_loop,
+                         name='auto-sync-scheduler', daemon=True)
+    SCHEDULER['thread'] = t
+    t.start()
+    slog('auto-sync scheduler：后台线程已启动（1s tick，按配置休眠）')
+    return t
+
+
+def stop_scheduler(join_timeout=3.0):
+    SCHEDULER['stop'] = True
+    SCHEDULER['wake'].set()
+    t = SCHEDULER.get('thread')
+    SCHEDULER['thread'] = None
+    if t and t.is_alive():
+        t.join(join_timeout)
+        return not t.is_alive()
+    return True
 
 
 # ---------------------------------------------------------------- Handler
@@ -815,6 +1083,10 @@ class LedgerHandler(BaseHTTPRequestHandler):
         # 直用 _send：契约字段不含 _json 的 ok 包装。
         if path == '/api/v1/identity':
             return self._send(200, identity_payload())
+
+        # V1.1：后端自动同步状态（只读，无副作用；供设置页状态卡轮询）。
+        if path == '/api/v1/sync-schedule':
+            return self._json(200, sync_schedule_status())
 
         # R12 Phase 0：Project / Session 下钻（EFFECTIVE 默认口径）。
         #   /api/v1/projects 与详情读取 board.by_project（唯一事实源，不重算成本）；
@@ -1410,6 +1682,8 @@ class LedgerHandler(BaseHTTPRequestHandler):
                 return self._post_maintenance_migrate_execute()
             if parsed.path == '/api/v1/scan':
                 return self._post_scan()
+            if parsed.path == '/api/v1/sync-schedule':
+                return self._post_sync_schedule()
             if parsed.path == '/api/v1/discover/refresh':
                 return self._post_discover_refresh()
             if parsed.path in ('/api/v1/projects/alias',
@@ -1425,6 +1699,32 @@ class LedgerHandler(BaseHTTPRequestHandler):
             slog('write 异常：%s' % type(exc).__name__)
             return self._err(500, 'write_failed',
                              '写入失败：%s' % type(exc).__name__)
+
+    def _post_sync_schedule(self):
+        """设置页「自动同步」开关/间隔（V1.1）。
+
+        只写运行态配置文件（auto-schedule.json，MIGRATION_DURABLE 成员），
+        不触账本；quiesce 期间拒绝（与其它写入口一致，防配置在迁移
+        拷贝窗口内被改）。真实采集由调度器线程按配置异步执行。
+        """
+        self._check_origin()
+        self._maintenance_block()
+        body = self._json_body()
+        # 严格拒绝未知字段（与 POST scan 同纪律）
+        unknown = set(body) - {'enabled', 'interval_minutes'}
+        if unknown:
+            return self._err(400, 'unexpected_field',
+                             '不接受字段：%s' % ', '.join(sorted(unknown)))
+        # 显式 null 与缺省区分：提供了就必须是合法值
+        if 'enabled' in body and body['enabled'] is None:
+            return self._err(400, 'bad_request', 'enabled 不能为 null')
+        if 'interval_minutes' in body and body['interval_minutes'] is None:
+            return self._err(400, 'bad_request', 'interval_minutes 不能为 null')
+        ok, payload = apply_sync_schedule(body.get('enabled'),
+                                          body.get('interval_minutes'))
+        if not ok:
+            return self._err(400, 'bad_request', payload)
+        return self._json(200, payload)
 
     def _post_discover_refresh(self):
         """完整重发现（用户主动触发）。只读本机文件 + 写运行态发现缓存，
@@ -2100,6 +2400,8 @@ def main():
     _out('')
     slog('server start：pid=%s port=%s python=%s'
          % (state['pid'], state['port'], os.path.basename(sys.executable)))
+    # V1.1：后端自动同步调度器（按 auto-schedule.json 配置；未启用=空转）
+    start_scheduler()
     if args.open:
         import webbrowser
         webbrowser.open(url)
@@ -2108,6 +2410,7 @@ def main():
     except KeyboardInterrupt:
         _out('\n  已退出。')
     finally:
+        stop_scheduler()
         _clear_state()
         slog('server stop：pid=%s' % state['pid'])
     return 0

@@ -568,8 +568,21 @@ def build_schedule():
            'interval_minutes': cfg.get('interval_minutes'),
            'installed_at': cfg.get('installed_at'),
            'method': cfg.get('method'),
-           'task_name': cfg.get('task_name') or TASK_NAME,
+           'task_name': None if cfg.get('method') == 'backend'
+           else (cfg.get('task_name') or TASK_NAME),
            'note': ''}
+
+    # V1.1：backend 调度器（serve.py 常驻线程）—— 下次运行时间由调度器
+    # 精确维护在配置文件里，直接采信；不用注册时刻做近似推算。
+    if cfg.get('method') == 'backend':
+        out['next_run_at'] = cfg.get('next_run_at')
+        out['next_run_basis'] = ('reported_by_backend_scheduler'
+                                 if cfg.get('next_run_at')
+                                 else 'backend_pending')
+        out['next_run_in_seconds'] = None
+        out['note'] = ('后端自动同步运行中（随智账后台进程生效，'
+                       '应用完全退出后暂停）。')
+        return out
 
     iv = cfg.get('interval_minutes')
     inst = cfg.get('installed_at')
