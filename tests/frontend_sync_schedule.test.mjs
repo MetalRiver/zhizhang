@@ -70,4 +70,34 @@ assert.ok(/Promise\.all\(\[loadIdentity\(\),loadHealth\(\),loadDiscover\(\),load
   assert.ok(src.includes('maybeAutoCheckUpdate();   // 启动时后台检查'));
 }
 
+// ---- toolStatusMeta：三态不误报（V1.1 验收修复的回归锁） ----
+{
+  const ctx2 = {};
+  vm.createContext(ctx2);
+  const { toolStatusMeta } = vm.runInContext(
+    pick('toolStatus') + '\n;({ toolStatusMeta });', ctx2);
+  // 适配器存在但本机无数据 → 必须显示 未找到（不得误报已连接）
+  assert.equal(
+    toolStatusMeta({ status: 'SUPPORTED', capability: 'TOKEN', data_sources_count: 0 }).b,
+    '未找到');
+  assert.equal(
+    toolStatusMeta({ status: 'SUPPORTED', capability: 'ACTIVITY', data_sources_count: 0 }).b,
+    '未找到');
+  // 有数据 → 已连接（TOKEN/ACTIVITY 语义区分保持）
+  assert.equal(
+    toolStatusMeta({ status: 'SUPPORTED', capability: 'TOKEN', data_sources_count: 2 }).b,
+    '已连接');
+  assert.equal(
+    toolStatusMeta({ status: 'SUPPORTED', capability: 'ACTIVITY', data_sources_count: 1 }).p,
+    '只能确认使用过，暂无具体用量');
+  // Codex 历史缺口口径保持
+  assert.equal(
+    toolStatusMeta({ status: 'SUPPORTED', capability: 'TOKEN', data_sources_count: 3,
+                     completeness: 'PARTIAL' }).b,
+    '已连接 · 部分历史缺口');
+  // 其余状态不受影响
+  assert.equal(toolStatusMeta({ status: 'DETECTED_UNSUPPORTED' }).b, '新发现 · 暂未支持');
+  assert.equal(toolStatusMeta({ status: 'UNKNOWN' }).b, '待识别');
+}
+
 console.log('frontend_sync_schedule: all assertions passed');

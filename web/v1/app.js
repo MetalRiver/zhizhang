@@ -416,7 +416,12 @@ function eventEvidence(e){
 }
 function settingsRow(title,description,action){return `<div class="settings-row"><div><strong>${title}</strong>${description?`<p>${description}</p>`:''}</div>${action||''}</div>`}
 function settingsGroup(title,body){return `<section class="settings-group"><h3>${title}</h3>${body}</section>`}
+/* toolStatus:begin */
 function toolStatusMeta(t){
+  /* V1.1 验收修复：SUPPORTED 只说明"有适配器"，data_sources_count=0 时本机
+     并未找到数据 —— 必须显示「未找到」，不得把适配器存在当「已连接」误报。 */
+  if(t.status==='SUPPORTED'&&!(t.data_sources_count>0))
+    return{p:t.reason||'标准位置未找到数据',b:'未找到',type:'unknown'};
   if(t.status==='SUPPORTED'&&t.capability==='TOKEN'){
     if(t.completeness==='PARTIAL')return{p:'完整用量 · 部分较早记录无法计量',b:'已连接 · 部分历史缺口',type:'partial'};
     return{p:'可读取完整使用量',b:'已连接',type:'complete'};
@@ -428,6 +433,7 @@ function toolStatusMeta(t){
   if(t.status==='DETECTED_UNSUPPORTED')return{p:t.reason||'确认发现了 AI 数据，暂未支持具体用量',b:'新发现 · 暂未支持',type:'partial'};
   return{p:t.reason||'检测到 AI 数据，待识别',b:'待识别',type:'unknown'};
 }
+/* toolStatus:end */
 function toolRow(t){
   const m=toolStatusMeta(t);
   return `<div class="settings-tool"><span class="tool-monogram">${esc((t.display_name||t.tool_id||'?').charAt(0).toUpperCase())}</span><div><strong>${esc(t.display_name||t.tool_id)}</strong><p>${esc(m.p)}${t.is_new?' · <b>新发现</b>':''}</p></div>${badge(m.b,m.type)}</div>`;
@@ -694,7 +700,13 @@ document.addEventListener('click',async e=>{
     state.discovering=true;render();
     let ok=true;
     try{state.discover=await post('/api/v1/discover/refresh',{});}
-    catch(e){ok=false;if(e.status!==409)toast(`重新发现失败：${(e&&e.message)||'请稍后再试'}`);}
+    catch(e){
+      ok=false;
+      if(e.status!==409){
+        const m=(e&&e.message)||'请稍后再试';
+        toast(m.startsWith('重新发现失败')?m:'重新发现失败：'+m);   /* 后端 message 已含前缀时不重复 */
+      }
+    }
     state.discovering=false;render();
     if(ok){const d=state.discover||{};
       toast(`已发现 ${d.found!=null?d.found:(d.tools||[]).length} 个 AI 工具`);}}
