@@ -2,7 +2,7 @@
   "$comment": "智账 · PathOrbit AI Ledger · Source Catalog V1.1。Universal Local AI Discovery 的规则事实源：每个已知工具一条规则；通用 schema 契约与扫描限额也在本文件。禁止写入任何用户机器的绝对路径——所有路径一律用 home 相对或环境变量 token（~、%APPDATA%、%LOCALAPPDATA%），由 discovery 引擎展开。产品边界（V1.1 冻结）：DISCOVERY != INGESTION——generic 来源只有由 catalog 规则（adapter 为 generic-* 的条目即锚定规则）、installed app 或 registry 身份锚定时才允许自动入账；仅靠目录 basename 的 unanchored generic 只发现不入账。",
   "schema_version": 1,
   "catalog_version": 1,
-  "updated": "2026-10-03",
+  "updated": "2026-10-24",
   "platform": "win32",
 
   "limits": {
@@ -134,6 +134,21 @@
       "capability": "ACTIVITY",
       "adapter": "traecn",
       "confidence_basis": "path",
+      "platform": "win32",
+      "version": 1
+    },
+    {
+      "id": "qodercn",
+      "display_name": "Qoder CN",
+      "process_names": ["qoder", "Qoder CN"],
+      "install_hints": [".qoder-cn"],
+      "install_aliases": ["Qoder CN"],
+      "data_path_hints": ["~/.qoder-cn/projects"],
+      "file_patterns": ["*.jsonl"],
+      "fingerprints": {"kind": "jsonl", "keys": ["sessionId", "uuid", "message.role"]},
+      "capability": "ACTIVITY",
+      "adapter": "qodercn",
+      "confidence_basis": "path+schema",
       "platform": "win32",
       "version": 1
     },

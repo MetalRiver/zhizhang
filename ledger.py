@@ -150,6 +150,24 @@ SOURCES = {
         'hint': ('Trae CN 的 ai-agent 数据库是加密格式（sqlite 打不开），'
                  '只有记忆摘要可读，因此只统计活动量'),
     },
+    # ---- Qoder CN（V1.1 ACTIVITY，2026-10-24 取证冻结）----
+    # ~/.qoder-cn/projects 为 Claude-Code 式会话转录：有 sessionId/uuid/timestamp
+    # 但无任何 token/cost 字段，model 恒为 'auto'（路由模式，非实际模型），
+    # 桌面库（main.sqlite）的 usage 类表全空 —— 只做活动量，绝不虚构 token/价格/模型。
+    'qodercn': {
+        'label': 'Qoder CN',
+        'mode': 'activity',
+        'grade': GRADE_ACTIVITY,
+        'visibility': 'activity',
+        'kind': 'jsonl',
+        'path': os.path.join(HOME, '.qoder-cn', 'projects'),
+        'candidates': [
+            os.path.join(HOME, '.qoder-cn', 'projects'),
+        ],
+        'probe': 'dir',
+        'hint': ('Qoder CN 本地只保留会话转录（无 token/cost 字段，'
+                 'model 恒为 auto 路由模式），因此只统计活动量'),
+    },
     # ---- Codex（OpenAI 桌面/CLI）：rollout 会话日志含逐请求 token 记录 ----
     # 语义取证结论（2026-10-03，本机实测；见 parse_codex_file 注释）：
     # token_usage_record.payload.usage 是**逐请求**新鲜用量（turn 累计
@@ -656,6 +674,13 @@ def list_files(client, root=None):
         if not os.path.isdir(r):
             return []
         return sorted(glob.glob(os.path.join(r, '**', '*.jsonl'), recursive=True))
+    if client == 'qodercn':
+        # projects/<项目目录>/<会话uuid>.jsonl —— 嵌套一层；限流同 codex（500）
+        r = root or SOURCES['qodercn']['path']
+        if not os.path.isdir(r):
+            return []
+        return sorted(glob.glob(os.path.join(r, '**', '*.jsonl'),
+                                recursive=True))[:_GENERIC_LIMIT_FILES]
     if client == 'codex':
         r = root or SOURCES['codex']['path']
         if not os.path.isdir(r):
@@ -1600,6 +1625,111 @@ def parse_traecn_file(path):
 
 PARSE_FILE['catpaw'] = parse_catpaw_file
 PARSE_FILE['traecn'] = parse_traecn_file
+
+
+def _qoder_ts_ms(v):
+    """Qoder timestamp 归一化：int/float（秒/毫秒启发式）或 ISO 字符串 → epoch ms。
+
+    实测（2026-10-24 取证）：同一文件内 timestamp 混有 int 与 str 两种类型。
+    秒/毫秒判定按量级启发：≥1e12 视为毫秒；1e8–1e12 视为秒×1000；
+    其余（0/负/异常量级）不猜 → None（调用方跳过该记录）。
+    """
+    if isinstance(v, bool):
+        return None
+    if isinstance(v, (int, float)):
+        iv = int(v)
+        if iv >= 10 ** 12:
+            return iv
+        if 10 ** 8 <= iv < 10 ** 12:
+            return iv * 1000
+        return None
+    ts = _iso_ms(v)
+    if ts is None:
+        ts = _local_ms(v)
+    return ts
+
+
+def parse_qodercn_file(path):
+    """Qoder CN：~/.qoder-cn/projects 的 Claude-Code 式会话转录（V1.1 ACTIVITY）。
+
+    口径（2026-10-24 取证冻结，第二阶段只读分析结论）：
+      - 只统计 type=user / type=assistant 的**消息事件**（活动量），
+        绝不产生 token / cost / 模型字段（转录里本来就没有；
+        message.model 恒为 'auto' 路由模式，不是实际模型，不可用）；
+      - kind 三分类：user / assistant / assistant_tooluse（含 tool_use 块的
+        assistant，只记「是否包含」与块数，绝不读取参数内容）——
+        活动事件 ≠ 模型调用次数，消费方不得把事件数当调用量；
+      - 排除：system / active-leaf / runtime-config / workspace-directories
+        及一切压缩摘要（isCompactSummary / compactMetadata 所在记录）；
+      - 身份：event_id = uuid#role，主键 (client, sessionId, event_id) 去重，
+        与文件位置/行号无关（复制/改名/移动/增量重扫均不双计）；
+        sessionId / uuid 缺失或时间不可解析 → 跳过该记录（不猜）；
+      - 隐私：只读结构字段（type/sessionId/uuid/timestamp/role/content 块类型），
+        不保留 message 正文 / thinking / 工具参数；项目归因取行内 cwd
+        （哈希化 project_key，显示名走既有脱敏，不落原始路径）。
+    """
+    with open(path, encoding='utf-8', errors='replace') as f:
+        lines = f.readlines()
+    cwd = None
+    for line in lines:
+        if cwd is not None:
+            break
+        if '"cwd"' in line:
+            try:
+                o = json.loads(line)
+                if isinstance(o, dict) and o.get('cwd'):
+                    cwd = o['cwd']
+            except Exception:
+                continue
+    pk = pkind = pdisp = None
+    if cwd:
+        pk, _np = project_key_from_path(cwd)
+        pkind = PROJECT_KIND_WORKSPACE
+        pdisp = path_display_name(cwd)
+    for line in lines:
+        try:
+            o = json.loads(line)
+        except Exception:
+            continue                     # 损坏行：安全跳过，scan 层按文件留痕
+        if not isinstance(o, dict):
+            continue
+        rtype = o.get('type')
+        if rtype not in ('user', 'assistant'):
+            continue                     # system/active-leaf/runtime-config/…
+        if o.get('isCompactSummary'):
+            continue                     # 压缩摘要不是活动事件
+        msg = o.get('message')
+        msg = msg if isinstance(msg, dict) else {}
+        role = msg.get('role') or rtype
+        sid = o.get('sessionId')
+        uid = o.get('uuid')
+        if not (isinstance(sid, str) and sid and
+                isinstance(uid, str) and uid):
+            continue                     # 身份缺失：明确跳过，绝不猜
+        ts = _qoder_ts_ms(o.get('timestamp'))
+        if ts is None:
+            continue                     # 时间不可解析：身份契约要求跳过
+        kind = 'user' if rtype == 'user' else 'assistant'
+        if rtype == 'assistant':
+            blocks = msg.get('content')
+            if isinstance(blocks, list) and any(
+                    isinstance(b, dict) and b.get('type') == 'tool_use'
+                    for b in blocks):
+                kind = 'assistant_tooluse'
+        yield {
+            'client': 'qodercn',
+            'session_key': sid,
+            'event_id': '%s#%s' % (uid, role),
+            'ts_ms': ts,
+            'kind': kind,
+            'source_file': path,
+            'project_key': pk,
+            'project_kind': pkind,
+            'project_display': pdisp,
+        }
+
+
+PARSE_FILE['qodercn'] = parse_qodercn_file
 
 
 # ---------------------------------------------------------------- dsh 血统/重放判定
