@@ -33,6 +33,23 @@ mod bootstrap;
 
 const BACKEND_PORT: u16 = 8787;
 const BACKEND_BASE: &str = "http://127.0.0.1:8787";
+
+/// V1.1 测试钩子（与 USAGE_LEDGER_START_PAGE 同模式）：并排运行/隔离验收用
+/// 端口旁路。USAGE_LEDGER_BACKEND_PORT 为合法非零 u16 时生效，仅影响本壳
+/// 与 sidecar 的本地通信；缺省/非法值回落 8787，生产行为不变。
+fn parse_backend_port(raw: Option<&str>) -> u16 {
+    raw.and_then(|s| s.trim().parse::<u16>().ok())
+        .filter(|&p| p != 0)
+        .unwrap_or(BACKEND_PORT)
+}
+
+fn backend_port() -> u16 {
+    parse_backend_port(std::env::var("USAGE_LEDGER_BACKEND_PORT").ok().as_deref())
+}
+
+fn backend_base() -> String {
+    format!("http://127.0.0.1:{}", backend_port())
+}
 const READY_TIMEOUT_SECS: u64 = 90;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -410,7 +427,7 @@ fn show_main_window(app: &AppHandle) {
 fn navigate_app_page(app: &AppHandle, path: &str) {
     show_main_window(app);
     if let Some(w) = app.get_webview_window("main") {
-        let _ = w.eval(&format!("window.location.replace('{BACKEND_BASE}{path}');"));
+        let _ = w.eval(&format!("window.location.replace('{}{}');", backend_base(), path));
     }
 }
 
@@ -436,7 +453,7 @@ fn graceful_exit(app: &AppHandle) {
         // 停止 scheduled work / 等待 active write：quiesce 端点占用扫描锁
         // 并拒绝新写请求。backend 无响应（已死/未起）时直接跳过。
         let _ = post_json(
-            BACKEND_PORT,
+            backend_port(),
             "/api/v1/maintenance/quiesce",
             "{}",
             4000,
@@ -630,7 +647,7 @@ fn fetch_backend_identity(port: u16) -> Result<BackendIdentity, String> {
 
 /// 校验「8787 上的占用者」是否可被本安装复用。失败 → 一律拒绝连接。
 fn verify_running_backend(app: &AppHandle) -> Result<(), String> {
-    let id = fetch_backend_identity(BACKEND_PORT)?;
+    let id = fetch_backend_identity(backend_port())?;
     let (ver, tag) = bundled_backend_version_tag(app)?;
     let expected = ExpectedBackend {
         app_version: ver,
@@ -681,7 +698,7 @@ fn spawn_backend(app: &AppHandle) -> Result<Ownership, String> {
     let mut cmd = Command::new(&exe);
     cmd.arg("--no-open")
         .arg("--port")
-        .arg(BACKEND_PORT.to_string())
+        .arg(backend_port().to_string())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -736,7 +753,7 @@ fn spawn_backend(app: &AppHandle) -> Result<Ownership, String> {
     //   state 生命周期兜底清理。）
     if let Some(code) = child.try_wait().ok().flatten() {
         return Err(match code.code() {
-            Some(3) => format!("端口 {BACKEND_PORT} 已被其它程序占用。请释放该端口后重试。"),
+            Some(3) => format!("端口 {} 已被其它程序占用。请释放该端口后重试。", backend_port()),
             Some(2) => "检测到本产品服务已在运行，但就绪探测失败。请稍后重试。".to_string(),
             _ => format!("本地核心异常退出（退出码 {code:?}）。"),
         });
@@ -752,9 +769,9 @@ fn navigate_to_ui(app: &AppHandle) {
     // 测试钩子：USAGE_LEDGER_START_PAGE 可指定初始路由（如 models）。
     let page = std::env::var("USAGE_LEDGER_START_PAGE").unwrap_or_default();
     let url = if page.is_empty() {
-        format!("{BACKEND_BASE}/")
+        format!("{}/", backend_base())
     } else {
-        format!("{BACKEND_BASE}/#/{page}")
+        format!("{}/#/{page}", backend_base())
     };
     if let Some(w) = app.get_webview_window("main") {
         // 一次性导航目标（迁移完成后回设置页等）；否则回账本首页。
@@ -765,7 +782,7 @@ fn navigate_to_ui(app: &AppHandle) {
             .unwrap()
             .take();
         let url = match pending {
-            Some(path) if path.starts_with('/') => format!("{BACKEND_BASE}{path}"),
+            Some(path) if path.starts_with('/') => format!("{}{path}", backend_base()),
             _ => url,
         };
         let _ = w.eval(&format!("window.location.replace('{url}');"));
@@ -818,7 +835,7 @@ fn boot_sequence(app: AppHandle, is_retry: bool) {
 
         // 1) 端口已有人监听 → 必须先验明身份；仅兼容的 frozen/本安装 backend 可复用。
         //    校验失败：不连接、不杀占用者，给出明确启动错误（Retry / Exit 由错误卡提供）。
-        match probe_backend_ready(BACKEND_PORT) {
+        match probe_backend_ready(backend_port()) {
             Some(true) => match verify_running_backend(&app) {
                 Ok(()) => {
                     *state.ownership.lock().unwrap() = Some(Ownership::Reused);
@@ -830,7 +847,7 @@ fn boot_sequence(app: AppHandle, is_retry: bool) {
                     emit_backend_failed(
                         &app,
                         format!(
-                            "8787 已被不兼容的智账 backend 或其他服务占用（{reason}）。已阻止连接，未终止占用进程；请关闭该进程后重试。"
+                            "{} 已被不兼容的智账 backend 或其他服务占用（{reason}）。已阻止连接，未终止占用进程；请关闭该进程后重试。", backend_port()
                         ),
                     );
                     return;
@@ -851,10 +868,10 @@ fn boot_sequence(app: AppHandle, is_retry: bool) {
         loop {
             if Instant::now() >= deadline {
                 emit_backend_failed(&app,
-                    format!("本地核心未能在 {READY_TIMEOUT_SECS} 秒内就绪（127.0.0.1:{BACKEND_PORT}）。"));
+                    format!("本地核心未能在 {READY_TIMEOUT_SECS} 秒内就绪（127.0.0.1:{}）。", backend_port()));
                 return;
             }
-            match probe_backend_ready(BACKEND_PORT) {
+            match probe_backend_ready(backend_port()) {
                 Some(true) => {
                     // 双保险：即使是本次拉起的 backend，也要身份一致才进入。
                     // 不一致（端口在启动窗口内被第三方抢占等）→ 终止【自有】子进程并失败。
@@ -881,7 +898,7 @@ fn boot_sequence(app: AppHandle, is_retry: bool) {
                     if let Some(child) = state.child.lock().unwrap().as_mut() {
                         if let Ok(Some(code)) = child.try_wait() {
                             let msg = match code.code() {
-                                Some(3) => format!("端口 {BACKEND_PORT} 已被其它程序占用。请释放该端口后重试。"),
+                                Some(3) => format!("端口 {} 已被其它程序占用。请释放该端口后重试。", backend_port()),
                                 Some(2) => "检测到本产品服务已在运行，但就绪探测失败。请稍后重试。".to_string(),
                                 _ => format!("本地核心异常退出（退出码 {code:?}）。"),
                             };
@@ -1061,7 +1078,7 @@ fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
                 // 更新账本 = 聚焦主窗 + 触发一次增量扫描（与 UI 内按钮同通道）。
                 show_main_window(app);
                 std::thread::spawn(|| {
-                    let _ = post_json(BACKEND_PORT, "/api/v1/scan", "{}", 15000);
+                    let _ = post_json(backend_port(), "/api/v1/scan", "{}", 15000);
                 });
             }
             "tray-settings" => navigate_app_page(app, "/settings"),
@@ -1382,7 +1399,7 @@ async fn download_and_install_update(app: AppHandle) -> Result<(), String> {
 
     // §51：安装前进入 UPDATE_INSTALL —— 停 scheduled scan、等待在途写、
     // 收尾 owned backend（Tray 隐藏导致的文件锁一并解决）。
-    let _ = post_json(BACKEND_PORT, "/api/v1/maintenance/quiesce", "{}", 4000);
+    let _ = post_json(backend_port(), "/api/v1/maintenance/quiesce", "{}", 4000);
     std::thread::sleep(Duration::from_millis(300));
     kill_owned_backend(&app);
 
@@ -1418,7 +1435,7 @@ fn maybe_show_whats_new(app: &AppHandle) {
 fn migrate_data_root_plan(target: String) -> Result<serde_json::Value, String> {
     let body = serde_json::json!({ "target": target }).to_string();
     let (status, text) = http_json(
-        BACKEND_PORT,
+        backend_port(),
         "POST",
         "/api/v1/maintenance/migrate/plan",
         Some(&body),
@@ -1481,14 +1498,14 @@ fn migrate_failure_message(resume_ok: bool, prior: String) -> String {
 /// 尽力 resume（后端存活时解除维护态）；返回是否确认成功。
 fn try_resume_backend() -> bool {
     matches!(
-        http_json(BACKEND_PORT, "POST", "/api/v1/maintenance/resume", Some("{}"), 8000),
+        http_json(backend_port(), "POST", "/api/v1/maintenance/resume", Some("{}"), 8000),
         Some((200, _))
     )
 }
 
 fn migrate_execute_inner(app: &AppHandle, target: &str) -> Result<serde_json::Value, String> {
     // 1) 进入维护态：只有 200 才算成功（409 = 已有扫描，绝不继续）
-    let (qs, _) = http_json(BACKEND_PORT, "POST", "/api/v1/maintenance/quiesce", Some("{}"), 8000)
+    let (qs, _) = http_json(backend_port(), "POST", "/api/v1/maintenance/quiesce", Some("{}"), 8000)
         .ok_or_else(|| "本地服务无响应，迁移未开始".to_string())?;
     maintenance_entry_gate(qs)?;
 
@@ -1496,7 +1513,7 @@ fn migrate_execute_inner(app: &AppHandle, target: &str) -> Result<serde_json::Va
     //    bootstrap 尚未切换：此阶段任何失败都必须尝试 resume。
     let body = serde_json::json!({ "target": target }).to_string();
     match http_json(
-        BACKEND_PORT,
+        backend_port(),
         "POST",
         "/api/v1/maintenance/migrate/execute",
         Some(&body),
@@ -1634,6 +1651,18 @@ fn open_data_root(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backend_port_env_override_parsing() {
+        // V1.1 端口旁路：合法非零 u16 生效，其余一律回落 8787（生产行为不变）
+        assert_eq!(parse_backend_port(None), 8787);
+        assert_eq!(parse_backend_port(Some("8791")), 8791);
+        assert_eq!(parse_backend_port(Some(" 8792 ")), 8792);
+        assert_eq!(parse_backend_port(Some("0")), 8787);
+        assert_eq!(parse_backend_port(Some("bad")), 8787);
+        assert_eq!(parse_backend_port(Some("99999")), 8787);
+        assert_eq!(parse_backend_port(Some("")), 8787);
+    }
 
     // ---------------------------------------------------------------- Job lifecycle focused tests
     // 全部使用真实进程树（powershell 父 → powershell 子），不 mock bool。
