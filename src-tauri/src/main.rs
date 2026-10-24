@@ -1188,6 +1188,8 @@ fn main() {
             });
             boot_sequence(app.handle().clone(), false);
             maybe_show_whats_new(app.handle());
+            // V1.1.0：壳进程常驻更新检查线程（托盘隐藏时 WebView 定时器停摆的根治）
+            spawn_update_check_scheduler(app.handle().clone());
             Ok(())
         })
         .build(tauri::generate_context!())
@@ -1343,6 +1345,84 @@ fn complete_first_run(app: AppHandle) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------- updater（RC.3 §40-52）
+
+const UPDATE_CHECK_INTERVAL_SECS: u64 = 3600;
+const UPDATE_CHECK_THROTTLE_MS: u64 = 24 * 60 * 60 * 1000;
+
+/// V1.1.0 托盘常驻修复：窗口隐藏后 WebView2 被挂起、前端 setInterval 停摆
+/// （2026-10-25 隔离实测：隐藏 1h+ 整点 tick 未触发检查）。更新检查改由
+/// 壳进程常驻线程执行，不依赖 WebView 生命周期；前端 setInterval 保留作
+/// 可见态冗余（两路写都走 desktop_state 串行锁 + 同一 24h 节流，幂等）。
+fn parse_update_check_interval(raw: Option<&str>) -> u64 {
+    raw.and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|&s| s > 0)
+        .unwrap_or(UPDATE_CHECK_INTERVAL_SECS)
+}
+
+fn update_check_interval_secs() -> u64 {
+    parse_update_check_interval(
+        std::env::var("USAGE_LEDGER_UPDATE_CHECK_INTERVAL_SECS")
+            .ok()
+            .as_deref(),
+    )
+}
+
+/// 与前端 shouldAutoCheck 同规则：开关开启且距上次检查 ≥24h。
+fn should_auto_check_now(st: &desktop_state::DesktopState, now_ms: u64) -> bool {
+    st.auto_check_update
+        && now_ms.saturating_sub(st.last_update_check_ms.unwrap_or(0))
+            >= UPDATE_CHECK_THROTTLE_MS
+}
+
+fn spawn_update_check_scheduler(app: AppHandle) {
+    std::thread::spawn(move || {
+        let interval = std::time::Duration::from_secs(update_check_interval_secs());
+        loop {
+            std::thread::sleep(interval);
+            let st = desktop_state::load();
+            if !should_auto_check_now(&st, now_epoch_ms()) {
+                continue;
+            }
+            // 与 check_for_update 同通道；签名只在下载安装时强校验
+            let checked = build_updater(&app).and_then(|u| {
+                tauri::async_runtime::block_on(async move { u.check().await })
+                    .map_err(|e| format!("暂时无法检查更新：{e}"))
+            });
+            match checked {
+                Ok(update) => {
+                    // 与 IPC 写串行；重读后再只改本函数负责的字段
+                    let _g = desktop_state_guard();
+                    let mut st = desktop_state::load();
+                    st.last_update_check_ms = Some(now_epoch_ms());
+                    match &update {
+                        Some(u) => {
+                            let v = u.version.trim().to_string();
+                            st.update_available_version =
+                                if v.is_empty() { None } else { Some(v) };
+                            st.update_available_notes =
+                                u.body.clone().filter(|s| !s.trim().is_empty());
+                        }
+                        None => {
+                            st.update_available_version = None;
+                            st.update_available_notes = None;
+                        }
+                    }
+                    if desktop_state::save(&st).is_ok() {
+                        let _ = app.emit(
+                            "update-auto-checked",
+                            serde_json::json!({
+                                "notice": st.update_available_version,
+                            }),
+                        );
+                    }
+                }
+                Err(_) => {
+                    // 网络失败：不推进时间戳、不动已有提醒（与前端静默策略一致）
+                }
+            }
+        }
+    });
+}
 
 /// 检查更新（§40、§43）：仅用户显式触发（无默认后台检查，§41）。
 /// 未配置更新源 → not_configured（如实展示，不虚构 URL）。
@@ -1662,6 +1742,43 @@ mod tests {
         assert_eq!(parse_backend_port(Some("bad")), 8787);
         assert_eq!(parse_backend_port(Some("99999")), 8787);
         assert_eq!(parse_backend_port(Some("")), 8787);
+    }
+
+    #[test]
+    fn update_check_interval_parsing() {
+        assert_eq!(parse_update_check_interval(None), 3600);
+        assert_eq!(parse_update_check_interval(Some("90")), 90);
+        assert_eq!(parse_update_check_interval(Some(" 120 ")), 120);
+        assert_eq!(parse_update_check_interval(Some("0")), 3600);
+        assert_eq!(parse_update_check_interval(Some("bad")), 3600);
+    }
+
+    #[test]
+    fn should_auto_check_matches_frontend_throttle_rules() {
+        use desktop_state::DesktopState;
+        let now = 1_800_000_000_000u64;
+        let day = 24 * 60 * 60 * 1000u64;
+        let base = || DesktopState {
+            auto_check_update: true,
+            last_update_check_ms: Some(now - day - 1),
+            ..DesktopState::default()
+        };
+        assert!(should_auto_check_now(&base(), now), "超过 24h 必须检查");
+        let within = DesktopState {
+            last_update_check_ms: Some(now - day + 60_000),
+            ..base()
+        };
+        assert!(!should_auto_check_now(&within, now), "24h 内不重复检查");
+        let off = DesktopState {
+            auto_check_update: false,
+            ..base()
+        };
+        assert!(!should_auto_check_now(&off, now), "开关关闭绝不检查");
+        let never = DesktopState {
+            last_update_check_ms: None,
+            ..base()
+        };
+        assert!(should_auto_check_now(&never, now), "从未检查过必须检查");
     }
 
     // ---------------------------------------------------------------- Job lifecycle focused tests

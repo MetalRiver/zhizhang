@@ -901,7 +901,11 @@ try{const ev=window.__TAURI__&&window.__TAURI__.event;
     /* 下载进度（§49） */
     ev.listen('update-download-progress',p=>{
       if(state.update&&state.update.phase==='downloading'){
-        state.update.progress=p;render();}});}
+        state.update.progress=p;render();}});
+    /* V1.1.0：壳进程常驻线程完成自动检查（托盘隐藏时 WebView 定时器停摆，
+       检查在 Rust 侧执行并落 desktop-state）→ 刷新侧边栏提醒 */
+    ev.listen('update-auto-checked',async()=>{
+      await loadDesktop();initUpdateNotice();render();});}
 }catch(e){}
 (async function boot(){
   render();
