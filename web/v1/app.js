@@ -87,7 +87,7 @@ const state={
   update:null,whatsNewShown:false,whatsNewData:null,changelogData:null,
   updateAvailable:null,updateNotes:'',
   onboarding:'welcome',scan:'idle',data:null,identity:null,health:null,
-  discover:null,unassigned:[],replayCount:null,pending:null,moveIds:[],
+  discover:null,unassigned:[],replayCount:null,pending:null,moveIds:[],sync:null,
   error:null,booted:false
 };
 if(!['overview','explore','settings'].includes(state.view))state.view='overview';
@@ -168,6 +168,38 @@ function sidebarUpdate(){
   return `<div class="sidebar-version">${cur?`<small class="sidebar-ver-text">版本 ${esc(cur)}</small>`:''}${ver?`<button class="update-entry" data-action="open-about-update" title="发现新版本 ${esc(ver)}"><i class="update-dot" aria-hidden="true"></i>发现新版本 ${esc(ver)}</button>`:''}</div>`;
 }
 async function loadHealth(){try{state.health=await api('/api/v1/health');}catch(e){state.health=null;}}
+/* ---------------- 自动同步（V1.1 后端调度器） ---------------- */
+async function loadSync(){try{state.sync=await api('/api/v1/sync-schedule');}catch(e){state.sync=null;}}
+/* syncStatus:begin */
+function syncStatusMeta(s){
+  if(!s)return{label:'状态不可用',type:'unknown'};
+  if(!s.enabled)return{label:'未开启',type:'unknown'};
+  if(s.maintenance_quiesced)return{label:'维护静默中，暂停运行',type:'partial'};
+  if(s.scan_running)return{label:'正在同步',type:'activity'};
+  if(s.last_status&&String(s.last_status).startsWith('postponed'))return{label:'运行中（上轮顺延）',type:'partial'};
+  if(s.last_status==='failed')return{label:'运行中（上轮失败）',type:'error'};
+  return{label:'运行中',type:'complete'};
+}
+function syncIntervalButtons(s){
+  const cur=String(s&&s.interval_minutes||30);
+  return `<div class="segments sync-intervals">${[15,30,60,120].map(v=>`<button data-action="set-sync-interval" data-interval="${v}" class="${cur===String(v)?'active':''}">${v>=60?(v/60)+' 小时':v+' 分钟'}</button>`).join('')}</div>`;
+}
+/* syncStatus:end */
+function autoSyncGroup(){
+  const s=state.sync;
+  if(!s||s.available===false)return settingsGroup('自动同步',settingsRow('自动更新账本','本地服务状态暂不可用，无法配置。',badge('不可用','unknown')));
+  const m=syncStatusMeta(s);
+  const rows=[settingsRow('自动更新账本',`智账保持运行时，每 ${s.interval_minutes||30} 分钟自动读取最新使用记录；完全退出后暂停，已记入账本的历史不受影响。`,switchBtn(s.enabled===true,'toggle-auto-sync','自动更新账本'))];
+  if(s.enabled){
+    rows.push(settingsRow('同步频率',`当前每 ${s.interval_minutes||30} 分钟一次。`,syncIntervalButtons(s)));
+    rows.push(settingsRow('下次自动更新',s.next_run_at?dateText(Date.parse(s.next_run_at)):'即将运行',badge(m.label,m.type)));
+  }
+  const lastText=s.last_run_at?dateText(Date.parse(s.last_run_at)):null;
+  const lastOutcome=!s.last_status?'尚未运行':s.last_status==='success'?'成功':s.last_status==='partial_failure'?'部分成功':String(s.last_status).startsWith('postponed')?'顺延（未运行）':'失败';
+  rows.push(settingsRow('最近一次自动结果',lastText?`${lastText} · ${lastOutcome}`:'尚未运行',''));
+  if(s.last_errors&&s.last_errors.length)rows.push(settingsRow('上次未成功的原因',esc(s.last_errors.join('；')),''));
+  return settingsGroup('自动同步',rows.join(''));
+}
 async function loadDiscover(force){
   if(state.discover&&!force)return state.discover;
   try{state.discover=await api('/api/v1/discover');}catch(e){state.discover=null;}
@@ -419,7 +451,7 @@ function settingsBody(tab){
     const labels={never:'尚未更新',running:'正在更新',success:'成功',partial:'部分成功',error:'失败'};
     const explanation=result==='never'?'还没有更新过账本。可以使用立即更新读取本机记录。':result==='error'?'本次读取失败，上次保存的账本仍保留。':result==='partial'?'其他工具已更新；部分工具暂时无法读取。':result==='running'?'正在读取最新记录，已有账本仍可查看。':'已读取主要工具的使用记录，部分工具只有使用痕迹。';
     const grades=d.grades||{};
-    return note+settingsGroup('最近一次更新',`<dl class="settings-update-facts"><div><dt>最近更新</dt><dd>${state.scan==='done'&&result!=='error'?'刚刚':(lr.finished_at?dateText(Date.parse(lr.finished_at)):'尚未更新')}</dd></div><div><dt>来源</dt><dd>${found} 个 AI 工具</dd></div><div><dt>结果</dt><dd>${badge(labels[result],result==='error'?'error':result==='partial'?'partial':result==='running'?'activity':'complete')}</dd></div></dl><p class="settings-description">${explanation}</p><div class="settings-group-actions">${settingsUpdateButton('立即更新')}</div>`)+settingsGroup('自动更新',settingsRow('打开应用时自动更新','当前版本尚未开放桌面设置。',notEnabled)+settingsRow('自动更新频率','需要最新记录时，请使用手动更新。',notEnabled));
+    return note+settingsGroup('最近一次更新',`<dl class="settings-update-facts"><div><dt>最近更新</dt><dd>${state.scan==='done'&&result!=='error'?'刚刚':(lr.finished_at?dateText(Date.parse(lr.finished_at)):'尚未更新')}</dd></div><div><dt>来源</dt><dd>${found} 个 AI 工具</dd></div><div><dt>结果</dt><dd>${badge(labels[result],result==='error'?'error':result==='partial'?'partial':result==='running'?'activity':'complete')}</dd></div></dl><p class="settings-description">${explanation}</p><div class="settings-group-actions">${settingsUpdateButton('立即更新')}</div>`)+autoSyncGroup();
   }
   if(tab==='attribution')return settingsGroup('整理你的项目',settingsRow('修改项目名称','给自动识别出来的项目起一个更好记的名字。','<button data-action="attribution">管理名称</button>')+settingsRow('待整理记录',`${state.unassigned.length} 场会话尚未归入正确项目。`,'<button data-action="organize-unassigned">开始整理</button>')+settingsRow('合并重复项目','把多个自动识别结果归为同一个项目。','<button data-action="organize-merge">管理合并</button>'))+'<p class="settings-footnote">只整理账本中的名称和归属，不修改电脑上的项目文件。</p>';
   if(tab==='privacy'){
@@ -568,7 +600,7 @@ async function scan(){
   try{
     const result=await post('/api/v1/scan',{});
     state.scan='done';state.scanResult=scanOutcome(result.status);
-    await loadHealth();await loadUnassigned();await loadQuery();
+    await loadHealth();await loadUnassigned();await loadQuery();await loadSync();
     render();toast(state.scanResult==='success'?'账本已更新':state.scanResult==='partial'?'账本已更新，部分工具需要检查':'暂时没能更新，已有账本仍保留');
   }catch(e){
     if(e.status===409){state.scan='idle';await loadHealth();render();toast('已有更新正在进行，请稍后再试');return;}
@@ -679,6 +711,17 @@ document.addEventListener('click',async e=>{
     try{const real=await tauriInvoke('set_autostart',{enable:on});await loadDesktop();render();
       toast(real?'已开启：登录 Windows 后智账自动启动':'已关闭开机启动');}
     catch(err){toast('设置未保存，请重试');}}
+  else if(act==='toggle-auto-sync'){
+    const on=!b.classList.contains('on');
+    try{await post('/api/v1/sync-schedule',{enabled:on});await loadSync();render();
+      const iv=(state.sync&&state.sync.interval_minutes)||30;
+      toast(on?`已开启自动同步：智账保持运行时每 ${iv} 分钟自动更新`:'已关闭自动同步（已记入账本的历史保留）');}
+    catch(e){toast('设置未保存：'+((e&&e.message)||'请重试'));}}
+  else if(act==='set-sync-interval'){
+    const v=parseInt(b.dataset.interval||'30',10);
+    try{await post('/api/v1/sync-schedule',{interval_minutes:v});await loadSync();render();
+      toast(`同步频率已改为每 ${v} 分钟一次`);}
+    catch(e){toast('设置未保存：'+((e&&e.message)||'请重试'));}}
   /* ---- RC.3 First Run：数据位置 / 后台方式 ---- */
   else if(act==='onboard-storage'){state.onboarding='storage';render();}
   else if(act==='storage-default'){state.storagePath=null;render();}
@@ -850,7 +893,7 @@ try{const ev=window.__TAURI__&&window.__TAURI__.event;
 }catch(e){}
 (async function boot(){
   render();
-  await Promise.all([loadIdentity(),loadHealth(),loadDiscover(),loadDesktop()]);  // 桌面壳状态失败 = 浏览器开发态
+  await Promise.all([loadIdentity(),loadHealth(),loadDiscover(),loadDesktop(),loadSync()]);  // 桌面壳状态失败 = 浏览器开发态
   initUpdateNotice();
   await loadUnassigned();
   await loadReplayCount();
@@ -871,3 +914,10 @@ try{const ev=window.__TAURI__&&window.__TAURI__.event;
   render();
   maybeAutoCheckUpdate();   // 启动时后台检查（仅在用户开启且距上次 ≥24h）；不阻塞首屏
 })();
+
+/* autoCheckTicker:begin */
+/* V1.1 托盘常驻修复：关闭到托盘后 webview 长期存活，「启动时检查」不再
+   重复发生（V1.0.0 实测：安装后 12 天只查过一次）。每小时复查一次；
+   24 小时节流与开关判断都在 shouldAutoCheck 内，未到期不发出任何请求。 */
+setInterval(()=>{maybeAutoCheckUpdate();},60*60*1000);
+/* autoCheckTicker:end */
