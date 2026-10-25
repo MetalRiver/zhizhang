@@ -100,4 +100,115 @@ assert.ok(/Promise\.all\(\[loadIdentity\(\),loadHealth\(\),loadDiscover\(\),load
   assert.equal(toolStatusMeta({ status: 'UNKNOWN' }).b, '待识别');
 }
 
+// ---- V1.1.1 statusPoll：可见性驱动轻量轮询（绝不触发扫描） ----
+{
+  const makePollCtx = (vis = 'visible', overlay = null) => {
+    const ctx = {
+      state: { overlay, health: { last_run: { finished_at: '2026-10-25T17:14:33' } } },
+      calls: [], refreshes: 0, renders: 0, listeners: 0,
+      async api(p) {
+        ctx.calls.push(p);
+        if (p === '/api/v1/health') {
+          if (ctx._healthDown) throw new Error('本地服务不可达');
+          return { last_run: { finished_at: ctx._nextFinished || '2026-10-25T17:29:40' } };
+        }
+        return { next_run_at: '2026-10-25T17:44:40', last_run_at: '2026-10-25T17:29:40', last_status: 'success' };
+      },
+      async refreshAndRender() { ctx.refreshes++; },
+      render() { ctx.renders++; },
+      document: { visibilityState: vis, addEventListener() { ctx.listeners++; } },
+      window: { addEventListener() { ctx.listeners++; } },
+      setInterval: () => 1,
+    };
+    return ctx;
+  };
+  const load = (ctx) => {
+    vm.createContext(ctx);
+    return vm.runInContext(
+      pick('statusPoll') + '\n;({ statusCheck, startStatusPolling, statusPoll })', ctx);
+  };
+
+  // T1 隐藏（托盘/后台）→ 不发任何请求
+  {
+    const ctx = makePollCtx('hidden'); load(ctx);
+    await vm.runInContext('statusCheck()', ctx);
+    assert.equal(ctx.calls.length, 0, '隐藏态不得轮询');
+  }
+  // T2 新一轮真实完成 → 只重取总览（refresh），仅两个 GET、无 POST
+  {
+    const ctx = makePollCtx(); load(ctx);
+    await vm.runInContext('statusCheck()', ctx);
+    assert.deepEqual(ctx.calls, ['/api/v1/health', '/api/v1/sync-schedule']);
+    assert.ok(!ctx.calls.some(c => c.includes('scan')), '轮询不得触发扫描');
+    assert.equal(ctx.refreshes, 1, '新一轮扫描完成才重取总览');
+    assert.equal(ctx.renders, 0, 'refreshAndRender 自带渲染，不重复 render');
+    // T3 同数据再查 → 无新请求副作用、不重复刷新/渲染
+    await vm.runInContext('statusCheck()', ctx);
+    assert.equal(ctx.refreshes, 1);
+    assert.equal(ctx.renders, 0);
+  }
+  // T4 overlay 打开（用户交互中）→ 只记待补不渲染；关闭后补一次刷新
+  {
+    const ctx = makePollCtx('visible', 'attribution'); load(ctx);
+    await vm.runInContext('statusCheck()', ctx);
+    assert.equal(ctx.refreshes, 0, '交互中不得刷新打断');
+    assert.equal(ctx.renders, 0);
+    ctx.state.overlay = null;                 // 交互结束（sig 不变，走 pendingReload 分支）
+    await vm.runInContext('statusCheck()', ctx);
+    assert.equal(ctx.refreshes, 1, '交互结束后补一次刷新');
+  }
+  // T5 后端断开 → health 置 null（未知态），不沿用旧成功冒充
+  {
+    const ctx = makePollCtx(); load(ctx);
+    ctx._healthDown = true;
+    await vm.runInContext('statusCheck()', ctx);
+    assert.equal(ctx.state.health, null, '断连后 state.health 必须置空（UI 显示未知）');
+    assert.equal(ctx.refreshes, 0);
+  }
+  // T6 startStatusPolling 幂等（重复调用不重复挂监听）
+  {
+    const ctx = makePollCtx(); const h = load(ctx);
+    vm.runInContext('startStatusPolling();startStatusPolling();', ctx);
+    assert.equal(ctx.listeners, 2, 'visibilitychange + focus 各一次');
+  }
+  // 静态契约：轮询块内不得出现任何 POST；boot 必须启动轮询
+  assert.ok(!pick('statusPoll').includes('post('), 'statusPoll 块内禁止 POST');
+  assert.ok(src.includes('startStatusPolling();          // V1.1.1'),
+    'boot 必须启动状态轮询');
+}
+
+// ---- V1.1.1 lastUpdateText：移除「刚刚更新」长驻 + trigger 区分 + 未知态 ----
+{
+  // 旧版样张（v1.1.0 原文，缺陷对照）：手动更新后 state.scan==='done' 长驻
+  // 「刚刚更新」，与账本真实时间脱钩 —— 先重现，再验证新版修复。
+  const legacySrc =
+    "function lastUpdateText(){const lr=state.health&&(state.health.last_run||{});" +
+    "if(state.scan==='done')return '刚刚更新';" +
+    "if(lr&&lr.finished_at)return relative(Date.parse(lr.finished_at))+'更新';" +
+    "return '尚未更新';}";
+  const mkState = () => ({
+    state: { scan: 'done', health: { last_run: { finished_at: '2026-10-25T17:14:33+08:00', trigger: 'scheduled' } } },
+    relative: t => (t ? '3 分钟前' : '暂无活动'),
+  });
+  const legacyCtx = mkState(); vm.createContext(legacyCtx);
+  assert.equal(vm.runInContext(legacySrc + ';lastUpdateText()', legacyCtx),
+    '刚刚更新', '旧缺陷重现：手动更新后长驻「刚刚更新」');
+  const newCtx = mkState(); vm.createContext(newCtx);
+  assert.equal(vm.runInContext(pick('lastUpdate') + ';lastUpdateText()', newCtx),
+    '自动 · 3 分钟前更新', '新版：真实时间 + 自动/手动区分');
+  const manualCtx = mkState(); manualCtx.state.health.last_run.trigger = 'api';
+  vm.createContext(manualCtx);
+  assert.equal(vm.runInContext(pick('lastUpdate') + ';lastUpdateText()', manualCtx),
+    '手动 · 3 分钟前更新');
+  const unknownCtx = { state: { scan: 'idle', health: null }, relative: () => '' };
+  vm.createContext(unknownCtx);
+  assert.equal(vm.runInContext(pick('lastUpdate') + ';lastUpdateText()', unknownCtx),
+    '状态未知 · 待刷新', 'health 不可读 → 明示未知，不用旧成功冒充');
+}
+
+// ---- V1.1.1 状态卡静态契约：实测执行行 + 「已开启」语义注 ----
+assert.ok(src.includes('最近一次执行（含手动）'), '自动同步卡必须含最近实际执行行');
+assert.ok(src.includes('成功 · 无新记录'), '零新增须可如实显示（有计数佐证）');
+assert.ok(src.includes('「已开启」表示自动更新计划已启用'), '「已开启」不得暗示线程健康');
+
 console.log('frontend_sync_schedule: all assertions passed');

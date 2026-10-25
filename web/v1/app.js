@@ -198,7 +198,11 @@ function autoSyncGroup(){
   const lastOutcome=!s.last_status?'尚未运行':s.last_status==='success'?'成功':s.last_status==='partial_failure'?'部分成功':String(s.last_status).startsWith('postponed')?'顺延（未运行）':'失败';
   rows.push(settingsRow('最近一次自动结果',lastText?`${lastText} · ${lastOutcome}`:'尚未运行',''));
   if(s.last_errors&&s.last_errors.length)rows.push(settingsRow('上次未成功的原因',esc(s.last_errors.join('；')),''));
-  return settingsGroup('自动同步',rows.join(''));
+  // V1.1.1：最近一次实际执行（含手动触发，来自 run-state 摘要）——与上一行
+  // 「最近一次自动结果」区分；零新增如实显示，有 events_inserted 计数佐证。
+  const ls=s.last_scan;
+  if(ls&&ls.finished_at)rows.push(settingsRow('最近一次执行（含手动）',`${dateText(Date.parse(ls.finished_at))} · ${ls.trigger==='scheduled'?'自动':'手动'} · ${ls.status==='success'?(ls.events_inserted>0?`成功 · 新增 ${ls.events_inserted} 条`:'成功 · 无新记录'):(ls.status||'—')}`,''));
+  return settingsGroup('自动同步',rows.join(''))+'<p class="settings-footnote">「已开启」表示自动更新计划已启用；实际执行情况以上方执行记录为准，完全退出智账后暂停。</p>';
 }
 async function loadDiscover(force){
   if(state.discover&&!force)return state.discover;
@@ -279,12 +283,17 @@ function emptyCard(title,description,action='clear-filters',cta='查看全部历
 function statusNotice(title,description,action,cta,type='partial',glyph='shield'){return `<div class="state-notice ${type}" role="status">${icon(glyph)}<div><strong>${title}</strong><p>${description}</p></div><button class="text-button" data-action="${action}">${cta} →</button></div>`}
 function brand(){return `<div class="brand"><img class="brand-logo" src="/assets/art/brand/zhizhang-128.png" alt="智账"><div><strong>智账</strong><small>PathOrbit AI Ledger</small></div></div>`}
 function shell(content){return `<div class="shell"><aside class="sidebar">${brand()}<div class="nav-label">我的 AI 使用</div><nav class="nav" aria-label="主要导航">${[['overview','总览'],['explore','探索'],['settings','设置']].map(([id,name])=>{const dot=id==='settings'&&state.updateAvailable?`<i class="update-dot" aria-hidden="true"></i>`:'';return `<button data-nav="${id}" class="${state.view===id?'active':''}"${dot?` title="发现新版本 ${esc(state.updateAvailable)}"`:''}>${icon(id)}${name}${dot}</button>`}).join('')}</nav><div class="sidebar-bottom">${sidebarUpdate()}<div class="local">${icon('shield')} 数据只保存在本机</div><p>用过的 AI，<br>慢慢成为自己的账本。</p><small>工具清理历史后，<br>已记账的记录依然保留。</small></div></aside><main class="main ${state.view==='settings'?'settings-main':''}">${content}</main></div>`}
+/* lastUpdate:begin */
+/* V1.1.1：总览更新时间取 health.last_run 真实值（区分自动/手动触发）；
+   移除 state.scan==='done' 长驻「刚刚更新」——那只是本页会话内点过手动更新
+   的痕迹，不代表账本时间。health 不可读时明示未知，不用旧成功冒充实时状态。 */
 function lastUpdateText(){
   const lr=state.health&&(state.health.last_run||{});
-  if(state.scan==='done')return '刚刚更新';
-  if(lr&&lr.finished_at)return relative(Date.parse(lr.finished_at))+'更新';
+  if(!state.health)return '状态未知 · 待刷新';
+  if(lr&&lr.finished_at)return (lr.trigger==='scheduled'?'自动 · ':lr.trigger==='api'?'手动 · ':'')+relative(Date.parse(lr.finished_at))+'更新';
   return '尚未更新';
 }
+/* lastUpdate:end */
 function scanButton(label='更新账本'){return `<button class="primary inline" data-action="scan" ${state.scan==='running'?'disabled':''}>${icon('scan')}${state.scan==='running'?'正在更新…':label}</button>`}
 function header(title,context,sub){return `<header class="page-header"><div><div class="eyebrow">${context}</div><h1>${title}</h1>${sub?`<p class="subtitle">${sub}</p>`:''}</div><div class="header-actions"><small>${lastUpdateText()}</small>${scanButton()}</div></header>`}
 function option(value,label,current){return `<option value="${esc(value)}" ${current===value?'selected':''}>${esc(label)}</option>`}
@@ -455,9 +464,16 @@ function settingsBody(tab){
   if(tab==='scan'){
     const result=state.scan==='running'?'running':state.scan==='done'?state.scanResult:(lr.result&&lr.result!=='unknown'?scanOutcome(lr.result):'never');
     const labels={never:'尚未更新',running:'正在更新',success:'成功',partial:'部分成功',error:'失败'};
-    const explanation=result==='never'?'还没有更新过账本。可以使用立即更新读取本机记录。':result==='error'?'本次读取失败，上次保存的账本仍保留。':result==='partial'?'其他工具已更新；部分工具暂时无法读取。':result==='running'?'正在读取最新记录，已有账本仍可查看。':'已读取主要工具的使用记录，部分工具只有使用痕迹。';
+    // V1.1.1：最近更新取 health.last_run 真实值并标注触发方式（不再显示
+    // 「刚刚」）；零新增须有 sync.last_scan（run-state 摘要）同轮佐证才显示
+    // 「无新记录」；health 不可读 → 状态未知·待刷新，不冒充实时状态。
+    const ls=(state.sync&&state.sync.last_scan)||null;
+    const sameRound=!!(ls&&ls.finished_at&&ls.finished_at===lr.finished_at);
+    const whenText=!state.health?'状态未知 · 待刷新':(lr.finished_at?((lr.trigger==='scheduled'?'自动 · ':lr.trigger==='api'?'手动 · ':'')+dateText(Date.parse(lr.finished_at))):'尚未更新');
+    let explanation=result==='never'?'还没有更新过账本。可以使用立即更新读取本机记录。':result==='error'?'本次读取失败，上次保存的账本仍保留。':result==='partial'?'其他工具已更新；部分工具暂时无法读取。':result==='running'?'正在读取最新记录，已有账本仍可查看。':'已读取主要工具的使用记录，部分工具只有使用痕迹。';
+    if(sameRound&&result==='success')explanation+=ls.events_inserted>0?`本次新增 ${ls.events_inserted} 条记录。`:'本次扫描成功，无新记录。';
     const grades=d.grades||{};
-    return note+settingsGroup('最近一次更新',`<dl class="settings-update-facts"><div><dt>最近更新</dt><dd>${state.scan==='done'&&result!=='error'?'刚刚':(lr.finished_at?dateText(Date.parse(lr.finished_at)):'尚未更新')}</dd></div><div><dt>来源</dt><dd>${found} 个 AI 工具</dd></div><div><dt>结果</dt><dd>${badge(labels[result],result==='error'?'error':result==='partial'?'partial':result==='running'?'activity':'complete')}</dd></div></dl><p class="settings-description">${explanation}</p><div class="settings-group-actions">${settingsUpdateButton('立即更新')}</div>`)+autoSyncGroup();
+    return note+settingsGroup('最近一次更新',`<dl class="settings-update-facts"><div><dt>最近更新</dt><dd>${whenText}</dd></div><div><dt>来源</dt><dd>${found} 个 AI 工具</dd></div><div><dt>结果</dt><dd>${badge(labels[result],result==='error'?'error':result==='partial'?'partial':result==='running'?'activity':'complete')}</dd></div></dl><p class="settings-description">${explanation}</p><div class="settings-group-actions">${settingsUpdateButton('立即更新')}</div>`)+autoSyncGroup();
   }
   if(tab==='attribution')return settingsGroup('整理你的项目',settingsRow('修改项目名称','给自动识别出来的项目起一个更好记的名字。','<button data-action="attribution">管理名称</button>')+settingsRow('待整理记录',`${state.unassigned.length} 场会话尚未归入正确项目。`,'<button data-action="organize-unassigned">开始整理</button>')+settingsRow('合并重复项目','把多个自动识别结果归为同一个项目。','<button data-action="organize-merge">管理合并</button>'))+'<p class="settings-footnote">只整理账本中的名称和归属，不修改电脑上的项目文件。</p>';
   if(tab==='privacy'){
@@ -633,6 +649,44 @@ async function refreshAndRender(){
   }
   render();
 }
+/* statusPoll:begin */
+/* V1.1.1：可见性驱动的轻量状态轮询——只读 health / sync-schedule 两个接口，
+   绝不触发扫描（无 POST）；不依赖 WebView 定时器长期精确（隐藏挂起无妨，
+   visibilitychange / focus 恢复即补查）。只有发现「新一轮扫描真实完成」
+   （last_run.finished_at 变化）才重取总览数据；overlay 打开时不渲染不打断
+   交互，关闭后补一次刷新；inflight 防重复请求，sig 无变化不重渲染。 */
+const statusPoll={timer:null,inflight:false,lastSig:'',pendingReload:false};
+async function statusCheck(){
+  if(statusPoll.inflight)return;
+  if(typeof document!=='undefined'&&document.visibilityState==='hidden')return;
+  statusPoll.inflight=true;
+  try{
+    const prev=((state.health&&state.health.last_run)||{}).finished_at||null;
+    const h=await api('/api/v1/health').catch(()=>null);
+    const s=await api('/api/v1/sync-schedule').catch(()=>null);
+    state.health=h;state.sync=s;
+    const now=(h&&h.last_run&&h.last_run.finished_at)||null;
+    const sig=JSON.stringify([now,s&&(s.next_run_at||null),s&&(s.last_run_at||null),s&&(s.last_status||null)]);
+    const changed=sig!==statusPoll.lastSig;
+    statusPoll.lastSig=sig;
+    if(now&&(!prev||now!==prev)){
+      if(state.overlay)statusPoll.pendingReload=true;                    // 用户交互中：只记待补
+      else{statusPoll.pendingReload=false;await refreshAndRender();}
+    }else if(statusPoll.pendingReload&&!state.overlay){
+      statusPoll.pendingReload=false;await refreshAndRender();           // 交互结束：补刷新
+    }else if(changed&&!state.overlay){
+      render();                                                          // 仅状态变化：轻渲染
+    }
+  }catch(e){/* 状态未知由 unknown 态呈现；绝不触发扫描 */}
+  finally{statusPoll.inflight=false;}
+}
+function startStatusPolling(){
+  if(statusPoll.timer)return;
+  statusPoll.timer=setInterval(statusCheck,30000);
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')statusCheck();});
+  window.addEventListener('focus',statusCheck);
+}
+/* statusPoll:end */
 /* ---------------- 事件 ---------------- */
 document.addEventListener('click',async e=>{
   const b=e.target.closest('button,[data-action],tr[data-project],tr[data-event-open],tr[data-explore-event]');if(!b||b.disabled)return;
@@ -911,6 +965,7 @@ try{const ev=window.__TAURI__&&window.__TAURI__.event;
   render();
   await Promise.all([loadIdentity(),loadHealth(),loadDiscover(),loadDesktop(),loadSync()]);  // 桌面壳状态失败 = 浏览器开发态
   initUpdateNotice();
+  startStatusPolling();          // V1.1.1：可见时轻量状态轮询（只读，不触发扫描）
   await loadUnassigned();
   await loadReplayCount();
     // 空账本（首次使用）：overview 无数据且无任何会话 → First Run。
