@@ -64,6 +64,21 @@ class Base(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
+    def isolated_env(self):
+        """合成 HOME：子进程不得看见真实机器上的 AI 工具数据源。
+
+        V1.1 起 discover 新增 qodercn 等规则，裸继承真实 HOME 会把本机
+        真实 ~/.qoder-cn 等数据扫进测试账本，断言随机器环境漂移
+        （2026-10-25 全量套件环境敏感失败的根因）。数据源一律来自
+        sources.json 显式指向的合成 fixtures。
+        """
+        local = os.path.join(self.tmp, 'localappdata')
+        roaming = os.path.join(self.tmp, 'appdata')
+        for d in (local, roaming):
+            os.makedirs(d, exist_ok=True)
+        return {'HOME': self.home, 'USERPROFILE': self.home,
+                'LOCALAPPDATA': local, 'APPDATA': roaming}
+
     # ---- 便利读取 ----
     @staticmethod
     def _json(path):
@@ -115,6 +130,20 @@ class Base(unittest.TestCase):
                 }) + '\n')
         return p
 
+    def write_traecn_agentdb(self):
+        """在合成 APPDATA 里构造 Trae CN 加密库文件（opaque 登记用）。
+
+        traecn_agentdb 属 OPAQUE_STORES：probe 只查文件存在性，内容
+        给非 SQLite 头贴近真实加密库形态。原用例裸继承真实 APPDATA、
+        依赖本机真实安装的 Trae 才能过——2026-10-25 改合成源。
+        """
+        p = os.path.join(self.tmp, 'appdata', 'Trae CN',
+                         'ModularData', 'ai-agent', 'database.db')
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, 'wb') as f:
+            f.write(b'\x00not-a-sqlite-db encrypted-like payload')
+        return p
+
     def sources_json(self, **over):
         base = {
             'zcode': os.path.join(self.fixtures, 'none.sqlite'),
@@ -139,7 +168,7 @@ class TestDiscovery(Base):
     def test_discovery_structure(self):
         self.write_workbuddy(os.path.join(self.fixtures, 'wb'))
         self.sources_json()
-        code, out = run(['ledger.py', 'discover'], self.tmp)
+        code, out = run(['ledger.py', 'discover'], self.tmp, env=self.isolated_env())
         self.assertEqual(code, 0, out)
         rep = self._json(os.path.join(self.tmp, 'discovery.json'))
         self.assertEqual(rep['schema_version'], 1)
@@ -161,7 +190,7 @@ class TestDiscovery(Base):
     def test_discovery_finds_without_manual_paths(self):
         self.write_workbuddy(os.path.join(self.fixtures, 'wb'))
         self.sources_json()
-        code, out = run(['ledger.py', 'discover'], self.tmp)
+        code, out = run(['ledger.py', 'discover'], self.tmp, env=self.isolated_env())
         self.assertEqual(code, 0, out)
         self.assertIn('自动发现', out)
         self.assertIn('数据等级', out)
@@ -170,7 +199,7 @@ class TestDiscovery(Base):
         """不透明存储必须被登记为 UNKNOWN，不能静默略过。"""
         self.write_workbuddy(os.path.join(self.fixtures, 'wb'))
         self.sources_json()
-        code, out = run(['ledger.py', 'discover'], self.tmp)
+        code, out = run(['ledger.py', 'discover'], self.tmp, env=self.isolated_env())
         self.assertEqual(code, 0, out)
         rep = self._json(os.path.join(self.tmp, 'discovery.json'))
         self.assertIn('opaque', rep)
@@ -185,7 +214,7 @@ class TestDataGrade(Base):
     def test_token_grade_after_scan(self):
         self.write_workbuddy(os.path.join(self.fixtures, 'wb'))
         self.sources_json()
-        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp)
+        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp, env=self.isolated_env())
         self.assertEqual(code, 0, out)
         rep = self._json(os.path.join(self.tmp, 'discovery.json'))
         wb = rep['sources']['workbuddy']
@@ -196,7 +225,7 @@ class TestDataGrade(Base):
     def test_activity_grade_not_token(self):
         self.write_catpaw(os.path.join(self.fixtures, 'cp'))
         self.sources_json()
-        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp)
+        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp, env=self.isolated_env())
         self.assertEqual(code, 0, out)
         rep = self._json(os.path.join(self.tmp, 'discovery.json'))
         self.assertEqual(rep['sources']['catpaw']['data_grade'], 'ACTIVITY')
@@ -206,7 +235,7 @@ class TestDataGrade(Base):
         """找到了存储但解析不出任何记录 —— 必须降级成 UNKNOWN，不许继续假装 TOKEN。"""
         self.write_workbuddy_without_usage(os.path.join(self.fixtures, 'wb'))
         self.sources_json()
-        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp)
+        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp, env=self.isolated_env())
         self.assertEqual(code, 0, out)
         rep = self._json(os.path.join(self.tmp, 'discovery.json'))
         wb = rep['sources']['workbuddy']
@@ -243,7 +272,7 @@ class TestRunStateContract(Base):
     def test_run_state_has_contract_fields(self):
         self.write_workbuddy(os.path.join(self.fixtures, 'wb'))
         self.sources_json()
-        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp)
+        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp, env=self.isolated_env())
         self.assertEqual(code, 0, out)
         st = self._json(os.path.join(self.tmp, 'run-state.json'))
         for k in self.REQUIRED:
@@ -265,7 +294,7 @@ class TestRunStateContract(Base):
     def test_auto_log_written(self):
         self.write_workbuddy(os.path.join(self.fixtures, 'wb'))
         self.sources_json()
-        run(['autopilot.py', 'auto', '--no-pricing'], self.tmp)
+        run(['autopilot.py', 'auto', '--no-pricing'], self.tmp, env=self.isolated_env())
         with open(os.path.join(self.tmp, 'auto.log'), encoding='utf-8') as f:
             log = f.read()
         self.assertIn('status=success', log)
@@ -273,8 +302,8 @@ class TestRunStateContract(Base):
     def test_status_json_flag(self):
         self.write_workbuddy(os.path.join(self.fixtures, 'wb'))
         self.sources_json()
-        run(['autopilot.py', 'auto', '--no-pricing'], self.tmp)
-        code, out = run(['autopilot.py', 'status', '--json'], self.tmp)
+        run(['autopilot.py', 'auto', '--no-pricing'], self.tmp, env=self.isolated_env())
+        code, out = run(['autopilot.py', 'status', '--json'], self.tmp, env=self.isolated_env())
         self.assertEqual(code, 0, out)
         st = json.loads(out)
         for k in self.REQUIRED:
@@ -284,8 +313,8 @@ class TestRunStateContract(Base):
         """增量扫描：文件未变则整文件跳过，不重复解压、不重复写库。"""
         self.write_workbuddy(os.path.join(self.fixtures, 'wb'))
         self.sources_json()
-        run(['autopilot.py', 'auto', '--no-pricing'], self.tmp)
-        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp)
+        run(['autopilot.py', 'auto', '--no-pricing'], self.tmp, env=self.isolated_env())
+        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp, env=self.isolated_env())
         self.assertEqual(code, 0, out)
         st = self._json(os.path.join(self.tmp, 'run-state.json'))
         self.assertEqual(st['events_seen'], 0, '未变文件不该被重新解析')
@@ -302,7 +331,7 @@ class TestRunStateContract(Base):
         import sqlite3
         self.write_workbuddy(os.path.join(self.fixtures, 'wb'))
         self.sources_json(catpaw=os.path.join(self.fixtures, 'no-such-catpaw'))
-        code, out = run(['ledger.py', 'scan'], self.tmp)
+        code, out = run(['ledger.py', 'scan'], self.tmp, env=self.isolated_env())
         self.assertEqual(code, 0, out)
         self.assertIn('no-such-catpaw', out.replace('\\', '/').replace('…/', ''), 
                       'catpaw 必须报告为空，而不是去读别的地方')
@@ -346,7 +375,7 @@ class TestFailureVisibility(Base):
         self.sources_json()
         blocked = os.path.join(self.tmp, 'usage-board.json')
         os.makedirs(blocked)              # 目录顶替文件，写入必失败
-        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp)
+        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp, env=self.isolated_env())
         self.assertEqual(code, 1, '期望退出码 1，实际 %s\n%s' % (code, out))
         st = self._json(os.path.join(self.tmp, 'run-state.json'))
         self.assertEqual(st['status'], 'failed')
@@ -362,7 +391,7 @@ class TestBoardAndRetention(Base):
     def test_board_schema_and_privacy(self):
         self.write_workbuddy(os.path.join(self.fixtures, 'wb'))
         self.sources_json()
-        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp)
+        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp, env=self.isolated_env())
         self.assertEqual(code, 0, out)
         b = self.read_board()
         self.assertEqual(b['schema_version'], 1)
@@ -387,8 +416,9 @@ class TestBoardAndRetention(Base):
     def test_board_contains_grades(self):
         self.write_workbuddy(os.path.join(self.fixtures, 'wb'))
         self.write_catpaw(os.path.join(self.fixtures, 'cp'))
+        self.write_traecn_agentdb()
         self.sources_json()
-        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp)
+        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp, env=self.isolated_env())
         self.assertEqual(code, 0, out)
         b = self.read_board()
         self.assertEqual(b['grades']['by_client']['workbuddy'], 'TOKEN')
@@ -402,7 +432,7 @@ class TestBoardAndRetention(Base):
     def test_activity_not_counted_as_token(self):
         self.write_catpaw(os.path.join(self.fixtures, 'cp'))
         self.sources_json()
-        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp)
+        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp, env=self.isolated_env())
         self.assertEqual(code, 0, out)
         b = self.read_board()
         # 只有 CatPaw（activity）时：不能有任何 Token
@@ -417,14 +447,14 @@ class TestBoardAndRetention(Base):
         wb = os.path.join(self.fixtures, 'wb2')
         p = self.write_workbuddy(wb, n=2)
         self.sources_json(workbuddy=wb)
-        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp)
+        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp, env=self.isolated_env())
         self.assertEqual(code, 0, out)
         b1 = self.read_board()
         self.assertEqual(b1['summary']['usage_events'], 2)
         self.assertEqual(b1['sources'][0]['files_missing'], 0)
 
         os.remove(p)                        # 模拟客户端清退历史
-        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp)
+        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp, env=self.isolated_env())
         # 源文件全被清退、但账本仍有留存记录 → 部分失败（不是「首次就无数据源」）
         self.assertEqual(code, 2,
                          '源被清退但数据仍在应为 partial_failure(2)，实际 %s\n%s' % (code, out))
@@ -450,9 +480,9 @@ class TestPricing(Base):
         with open(os.path.join(self.tmp, 'pricing.json'), 'w', encoding='utf-8') as f:
             json.dump({'glm-test-model': {'input': None, 'output': None,
                                           'cache_read': None, 'cache_write': None}}, f)
-        rc, so = run(['ledger.py', 'scan'], self.tmp)
+        rc, so = run(['ledger.py', 'scan'], self.tmp, env=self.isolated_env())
         self.assertEqual(rc, 0, so)
-        code, out = run(['ledger.py', 'board'], self.tmp)
+        code, out = run(['ledger.py', 'board'], self.tmp, env=self.isolated_env())
         self.assertEqual(code, 0, out)
         b = self.read_board()
         self.assertIsNone(b['summary']['estimated_cost_usd_top50_models'],
@@ -470,9 +500,9 @@ class TestPricing(Base):
             # 手工只填 output，其余留 null：不能把自动同步的 input/cache_read 抹掉
             json.dump({'glm-test-model': {'input': None, 'output': 9.0,
                                           'cache_read': None, 'cache_write': None}}, f)
-        rc, so = run(['ledger.py', 'scan'], self.tmp)
+        rc, so = run(['ledger.py', 'scan'], self.tmp, env=self.isolated_env())
         self.assertEqual(rc, 0, so)
-        code, out = run(['ledger.py', 'board'], self.tmp)
+        code, out = run(['ledger.py', 'board'], self.tmp, env=self.isolated_env())
         self.assertEqual(code, 0, out)
         b = self.read_board()
         self.assertEqual(b['summary']['priced_models'], 1)
@@ -489,8 +519,8 @@ class TestPricing(Base):
                                  'retrieved_at': '2026-09-18T00:00:00'},
                        'glm-test-model': {'input': 1.0, 'output': 2.0,
                                           'cache_read': 0.5, 'cache_write': None}}, f)
-        run(['ledger.py', 'scan'], self.tmp)
-        run(['ledger.py', 'board'], self.tmp)
+        run(['ledger.py', 'scan'], self.tmp, env=self.isolated_env())
+        run(['ledger.py', 'board'], self.tmp, env=self.isolated_env())
         b = self.read_board()
         meta = b['summary']['pricing']
         self.assertTrue(meta['auto'])
@@ -569,7 +599,14 @@ class TestNoPathOrbitDependency(unittest.TestCase):
                                                   'completion_tokens': 10}}}) + '\n')
             with open(os.path.join(tmp, 'sources.json'), 'w', encoding='utf-8') as fh:
                 json.dump({'workbuddy': fx}, fh)
-            code, out = run(['autopilot.py', 'auto', '--no-pricing'], tmp)
+            home = os.path.join(tmp, 'home')
+            la = os.path.join(tmp, 'localappdata')
+            ad = os.path.join(tmp, 'appdata')
+            for d in (home, la, ad):
+                os.makedirs(d, exist_ok=True)
+            env = {'HOME': home, 'USERPROFILE': home,
+                   'LOCALAPPDATA': la, 'APPDATA': ad}
+            code, out = run(['autopilot.py', 'auto', '--no-pricing'], tmp, env=env)
             self.assertEqual(code, 0, out)
             self.assertTrue(os.path.isfile(os.path.join(tmp, 'usage-board.json')))
             # 目录里绝不能出现 integrations
@@ -586,7 +623,7 @@ class TestHealth(Base):
     def test_health_generated_with_contract(self):
         self.write_workbuddy(os.path.join(self.fixtures, 'wb'))
         self.sources_json()
-        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp)
+        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp, env=self.isolated_env())
         self.assertEqual(code, 0, out)
         h = self._json(os.path.join(self.tmp, 'health.json'))
         self.assertIn(h['status'], ('healthy', 'partial', 'failed', 'unknown'))
@@ -615,9 +652,9 @@ class TestHealth(Base):
         wb = os.path.join(self.fixtures, 'wb3')
         p = self.write_workbuddy(wb, n=2)
         self.sources_json(workbuddy=wb)
-        run(['autopilot.py', 'auto', '--no-pricing'], self.tmp)
+        run(['autopilot.py', 'auto', '--no-pricing'], self.tmp, env=self.isolated_env())
         os.remove(p)
-        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp)
+        code, out = run(['autopilot.py', 'auto', '--no-pricing'], self.tmp, env=self.isolated_env())
         self.assertEqual(code, 2, out)
         h = self._json(os.path.join(self.tmp, 'health.json'))
         self.assertEqual(h['status'], 'partial')
@@ -628,7 +665,7 @@ class TestHealth(Base):
         """Dashboard 只读 board 也能拿到健康状态。"""
         self.write_workbuddy(os.path.join(self.fixtures, 'wb'))
         self.sources_json()
-        run(['autopilot.py', 'auto', '--no-pricing'], self.tmp)
+        run(['autopilot.py', 'auto', '--no-pricing'], self.tmp, env=self.isolated_env())
         b = self.read_board()
         self.assertIn('health', b)
         self.assertIn(b['health']['status'], ('healthy', 'partial', 'failed', 'unknown'))
@@ -652,18 +689,18 @@ class TestPricingSystem(Base):
             shutil.copy(os.path.join(ROOT, f), os.path.join(d, f))
         for cmd in (['ledger.py', 'status'], ['ledger.py', 'discover'],
                     ['ledger.py', 'report'], ['autopilot.py', 'status']):
-            code, out = run(cmd, d)
+            code, out = run(cmd, d, env=self.isolated_env())
             self.assertFalse(os.path.isfile(os.path.join(d, 'usage.db')),
                              '%s 不该创建 usage.db\n%s' % (cmd, out))
 
     def test_pricing_candidates_does_not_write(self):
         self.write_workbuddy(os.path.join(self.fixtures, 'wb'))
         self.sources_json()
-        run(['ledger.py', 'scan'], self.tmp)
+        run(['ledger.py', 'scan'], self.tmp, env=self.isolated_env())
         before = {f: os.path.getsize(os.path.join(self.tmp, f))
                   if os.path.isfile(os.path.join(self.tmp, f)) else None
                   for f in ('pricing.json', 'pricing.auto.json', 'usage.db')}
-        code, out = run(['ledger.py', 'pricing-candidates'], self.tmp)
+        code, out = run(['ledger.py', 'pricing-candidates'], self.tmp, env=self.isolated_env())
         self.assertEqual(code, 0, out)
         self.assertIn('不会', out)
         after = {f: os.path.getsize(os.path.join(self.tmp, f))
@@ -675,7 +712,7 @@ class TestPricingSystem(Base):
         """候选必须带供应商前缀信息，且不替用户选。"""
         self.write_workbuddy(os.path.join(self.fixtures, 'wb'))
         self.sources_json()
-        run(['ledger.py', 'scan'], self.tmp)
+        run(['ledger.py', 'scan'], self.tmp, env=self.isolated_env())
         with open(os.path.join(self.tmp, 'pricing.auto.json'), 'w',
                   encoding='utf-8') as f:
             json.dump({
@@ -690,14 +727,14 @@ class TestPricingSystem(Base):
         with open(os.path.join(self.tmp, 'pricing.json'), 'w', encoding='utf-8') as f:
             json.dump({'glm-test-model': {'input': None, 'output': None,
                                           'cache_read': None, 'cache_write': None}}, f)
-        code, out = run(['ledger.py', 'pricing-candidates'], self.tmp)
+        code, out = run(['ledger.py', 'pricing-candidates'], self.tmp, env=self.isolated_env())
         self.assertEqual(code, 0, out)
         self.assertIn('vendorA/glm-test-model', out)
         self.assertIn('vendorB/glm-test-model', out)
         self.assertIn('供应商 vendorA', out)
         self.assertIn('该键没有可用价格数据', out)
         # 未匹配单价时成本仍必须是 null
-        rc, so = run(['ledger.py', 'board'], self.tmp)
+        rc, so = run(['ledger.py', 'board'], self.tmp, env=self.isolated_env())
         self.assertEqual(rc, 0, so)
         b = self.read_board()
         self.assertIsNone(b['summary']['estimated_cost_usd_top50_models'])
@@ -714,7 +751,7 @@ class TestPricingSystem(Base):
             json.dump(payload, f)
         with open(pc, 'rb') as _f:
             before = _f.read()
-        env = {'USAGE_LEDGER_PRICING_URL_LITELLM': 'file:///' + self.tmp.replace(
+        env = {**self.isolated_env(), 'USAGE_LEDGER_PRICING_URL_LITELLM': 'file:///' + self.tmp.replace(
                    '\\', '/') + '/missing-litellm.json',
                'USAGE_LEDGER_PRICING_URL_OPENROUTER': 'file:///' + self.tmp.replace(
                    '\\', '/') + '/missing-openrouter.json'}
@@ -741,7 +778,7 @@ class TestPricingSystem(Base):
             {'glm-test-model': {'input_cost_per_token': 1e-6,
                                 'output_cost_per_token': 2e-6,
                                 'cache_read_input_token_cost': 0.5e-6}})
-        env = {'USAGE_LEDGER_PRICING_URL_LITELLM': 'file:///' + fx.replace('\\', '/'),
+        env = {**self.isolated_env(), 'USAGE_LEDGER_PRICING_URL_LITELLM': 'file:///' + fx.replace('\\', '/'),
                'USAGE_LEDGER_PRICING_URL_OPENROUTER': 'file:///' + self.tmp.replace(
                    '\\', '/') + '/nope.json'}
         code, out = run(['ledger.py', 'pricing-sync', '--source', 'all'], self.tmp, env=env)
