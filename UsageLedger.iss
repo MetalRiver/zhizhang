@@ -5,13 +5,13 @@
 [Setup]
 AppId={{A3F8B2C1-4D5E-6F70-8A9B-0C1D2E3F4A5B}
 AppName=智账
-AppVersion=1.1.0
+AppVersion=1.1.1
 AppPublisher=PathOrbit
 DefaultDirName={localappdata}\Programs\UsageLedger
 DefaultGroupName=智账
 DisableProgramGroupPage=yes
 OutputDir=installer
-OutputBaseFilename=ZhiZhang-1.1.0-win-x64-setup
+OutputBaseFilename=ZhiZhang-1.1.1-win-x64-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
