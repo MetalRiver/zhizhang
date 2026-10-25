@@ -448,5 +448,80 @@ class BuildScheduleBackend(unittest.TestCase):
         self.assertEqual(s['next_run_basis'], 'estimated_from_install_time')
 
 
+class RecordMergeRaceTests(SchedulerBase):
+    """V1.1.1：_record_sync_result 并发合并——扫描进行中改配置不被旧快照回滚。
+
+    缺陷背景（2026-10-25 生产诊断确证）：调度线程用 tick 时快照整体写回
+    auto-schedule.json，与 HTTP 线程的 apply_sync_schedule 读-改-写无互斥；
+    扫描窗口（数秒）内改间隔/停用可能被旧快照静默覆盖。
+    """
+
+    def test_interval_changed_during_scan_is_preserved(self):
+        ok, _ = serve.apply_sync_schedule(enabled=True, interval_minutes=30)
+        self.assertTrue(ok)
+        snap = serve._load_sync_cfg()          # tick 时快照（interval=30）
+        def fake_scan_change_interval(trigger='api'):
+            # 模拟扫描运行中用户把间隔 30→15（HTTP 线程并发 apply）
+            ok2, _2 = serve.apply_sync_schedule(interval_minutes=15)
+            self.assertTrue(ok2)
+            return dict(self.scan_result)
+        serve.run_scan_once = fake_scan_change_interval
+        self.assertEqual(serve._run_scheduled_sync(snap), 'ran')
+        cfg = serve._load_sync_cfg()
+        self.assertEqual(cfg.get('interval_minutes'), 15,
+                         '扫描中改的间隔不得被旧快照回滚')
+        self.assertEqual(cfg.get('last_status'), 'success')
+        self.assertEqual(cfg.get('last_trigger'), 'scheduled')
+        nxt = serve._parse_iso(cfg.get('next_run_at'))
+        self.assertIsNotNone(nxt)
+        delta = nxt - dt.datetime.now()
+        self.assertGreater(delta, dt.timedelta(minutes=5))
+        self.assertLessEqual(delta, dt.timedelta(minutes=16),
+                             '下次运行应按新间隔 15 分钟排')
+
+    def test_disabled_during_scan_stops_next_run(self):
+        ok, _ = serve.apply_sync_schedule(enabled=True, interval_minutes=30)
+        self.assertTrue(ok)
+        snap = serve._load_sync_cfg()
+        def fake_scan_disable(trigger='api'):
+            ok2, _2 = serve.apply_sync_schedule(enabled=False)
+            self.assertTrue(ok2)
+            return dict(self.scan_result)
+        serve.run_scan_once = fake_scan_disable
+        self.assertEqual(serve._run_scheduled_sync(snap), 'ran')
+        cfg = serve._load_sync_cfg()
+        self.assertIs(cfg.get('enabled'), False)
+        self.assertIsNone(cfg.get('next_run_at'),
+                          '扫描中被停用 → 不再排下次运行')
+        self.assertEqual(cfg.get('last_status'), 'success',
+                         '结果仍留痕（停用保留展示的语义不变）')
+
+    def test_status_payload_carries_last_scan(self):
+        """GET /sync-schedule 附带 last_scan（run-state 摘要，含手动触发）。"""
+        rs_path = os.path.join(self.tmp, 'run-state.json')
+        with open(rs_path, 'w', encoding='utf-8') as f:
+            json.dump({'trigger': 'api', 'started_at': '2026-10-25T10:00:00',
+                       'finished_at': '2026-10-25T10:00:05', 'status': 'success',
+                       'events_seen': 3, 'events_inserted': 0,
+                       'events_updated': 3}, f)
+        fake_paths = types.ModuleType('paths')
+        fake_paths.run_state_path = lambda: rs_path
+        old = sys.modules.get('paths')
+        sys.modules['paths'] = fake_paths
+        try:
+            status, body = self.call('GET', '/api/v1/sync-schedule')
+        finally:
+            if old is not None:
+                sys.modules['paths'] = old
+            else:
+                sys.modules.pop('paths', None)
+        self.assertEqual(status, 200)
+        ls = body.get('last_scan')
+        self.assertIsNotNone(ls)
+        self.assertEqual(ls['trigger'], 'api')
+        self.assertEqual(ls['events_inserted'], 0)
+        self.assertIn('next_run_at', body)
+
+
 if __name__ == '__main__':
     unittest.main()

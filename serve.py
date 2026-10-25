@@ -744,6 +744,10 @@ SCHED_MAX_INTERVAL = 1440
 SCHED_POSTPONE_MINUTES = 1     # 互斥/静默顺延后的重试间隔
 
 SCHEDULER = {'thread': None, 'stop': False, 'wake': threading.Event()}
+# V1.1.1：auto-schedule.json 读-改-写互斥——apply_sync_schedule（HTTP 线程）与
+# _record_sync_result（调度线程）并发写同一文件；此前无互斥，扫描窗口内改配置
+# 可能被 tick 时快照整体覆盖（旧配置静默回滚缺陷，2026-10-25 诊断确证）。
+SCHED_CFG_LOCK = threading.Lock()
 
 
 def _sync_schedule_path():
@@ -787,6 +791,26 @@ def _cfg_interval(cfg):
     return min(max(v, SCHED_MIN_INTERVAL), SCHED_MAX_INTERVAL)
 
 
+def _run_state_summary():
+    """V1.1.1：run-state.json 的最近一次实际扫描摘要（含手动触发）。
+
+    供 sync_schedule_status 附带返回——前端据此区分「最近一次自动同步」
+    （cfg.last_*）与「最近一次执行」（含 api 触发），并在零新增时给出
+    「成功 · 无新记录」的真实执行证据（events_inserted 计数）。
+    读失败/缺 finished_at 返回 None（前端显示未知，不冒充实时状态）。
+    """
+    try:
+        import paths
+        rs = _load_json(paths.run_state_path()) or {}
+    except Exception:
+        return None
+    if not rs.get('finished_at'):
+        return None
+    return {k: rs.get(k) for k in (
+        'trigger', 'started_at', 'finished_at', 'status',
+        'events_seen', 'events_inserted', 'events_updated')}
+
+
 def sync_schedule_status():
     """调度器对外状态（GET /api/v1/sync-schedule 载荷）。"""
     cfg = _load_sync_cfg()
@@ -802,6 +826,7 @@ def sync_schedule_status():
         'last_status': cfg.get('last_status'),
         'last_trigger': cfg.get('last_trigger'),
         'last_errors': list(cfg.get('last_errors') or []),
+        'last_scan': _run_state_summary(),
         'maintenance_quiesced': bool(MAINTENANCE['quiesced']),
         'scan_running': bool(SCAN_STATE['running']),
         'schema_version': SCHED_SCHEMA_VERSION,
@@ -831,41 +856,42 @@ def apply_sync_schedule(enabled=None, interval_minutes=None):
             return False, 'interval_minutes 超出范围（%d–%d 分钟）' % (
                 SCHED_MIN_INTERVAL, SCHED_MAX_INTERVAL)
         iv = interval_minutes
-    cfg = _load_sync_cfg()
-    # 只保留合法基线字段，坏文件自愈为默认
-    base = {k: cfg.get(k) for k in (
-        'last_run_at', 'last_status', 'last_errors', 'last_trigger',
-        'last_exit_code') if cfg.get(k) is not None}
-    now_s = _iso_now()
-    new_cfg = {'schema_version': SCHED_SCHEMA_VERSION}
-    new_cfg.update(base)
-    if iv is not None:
-        new_cfg['interval_minutes'] = iv
-    else:
-        new_cfg['interval_minutes'] = _cfg_interval(cfg)
-    if enabled is True:
-        new_cfg['enabled'] = True
-        new_cfg['method'] = 'backend'
-        new_cfg['task_name'] = None
-        new_cfg['installed_at'] = now_s
-        new_cfg['next_run_at'] = now_s        # 立即首跑（异步接手）
-    elif enabled is False:
-        new_cfg['enabled'] = False
-        new_cfg['method'] = None
-        new_cfg['installed_at'] = None
-        new_cfg['next_run_at'] = None
-    else:
-        # 仅改间隔：保持当前启停状态
-        new_cfg['enabled'] = bool(cfg.get('enabled'))
-        new_cfg['method'] = 'backend' if cfg.get('enabled') else None
-        new_cfg['installed_at'] = cfg.get('installed_at') if cfg.get('enabled') else None
-        if cfg.get('enabled'):
-            new_cfg['next_run_at'] = _iso(
-                _dt.datetime.now()
-                + _dt.timedelta(minutes=new_cfg['interval_minutes']))
+    with SCHED_CFG_LOCK:
+        cfg = _load_sync_cfg()
+        # 只保留合法基线字段，坏文件自愈为默认
+        base = {k: cfg.get(k) for k in (
+            'last_run_at', 'last_status', 'last_errors', 'last_trigger',
+            'last_exit_code') if cfg.get(k) is not None}
+        now_s = _iso_now()
+        new_cfg = {'schema_version': SCHED_SCHEMA_VERSION}
+        new_cfg.update(base)
+        if iv is not None:
+            new_cfg['interval_minutes'] = iv
         else:
+            new_cfg['interval_minutes'] = _cfg_interval(cfg)
+        if enabled is True:
+            new_cfg['enabled'] = True
+            new_cfg['method'] = 'backend'
+            new_cfg['task_name'] = None
+            new_cfg['installed_at'] = now_s
+            new_cfg['next_run_at'] = now_s        # 立即首跑（异步接手）
+        elif enabled is False:
+            new_cfg['enabled'] = False
+            new_cfg['method'] = None
+            new_cfg['installed_at'] = None
             new_cfg['next_run_at'] = None
-    _save_sync_cfg(new_cfg)
+        else:
+            # 仅改间隔：保持当前启停状态（V1.1.1 保持原语义不变，仅加锁防并发覆盖）
+            new_cfg['enabled'] = bool(cfg.get('enabled'))
+            new_cfg['method'] = 'backend' if cfg.get('enabled') else None
+            new_cfg['installed_at'] = cfg.get('installed_at') if cfg.get('enabled') else None
+            if cfg.get('enabled'):
+                new_cfg['next_run_at'] = _iso(
+                    _dt.datetime.now()
+                    + _dt.timedelta(minutes=new_cfg['interval_minutes']))
+            else:
+                new_cfg['next_run_at'] = None
+        _save_sync_cfg(new_cfg)
     slog('auto-sync 配置更新：enabled=%s interval=%s' % (
         new_cfg.get('enabled'), new_cfg.get('interval_minutes')))
     return True, sync_schedule_status()
@@ -876,7 +902,13 @@ def _iso(dt):
 
 
 def _record_sync_result(cfg, started_at_iso, status, errors, exit_code=None):
-    """调度运行结果落盘（原子写），并排下一次运行。"""
+    """调度运行结果落盘（原子写），并排下一次运行。
+
+    V1.1.1 并发安全：扫描运行期间用户可能已改 enabled/interval —— 写回前在
+    SCHED_CFG_LOCK 内重读现文件合并**用户设置字段**，防止本函数用 tick 时
+    快照整体覆盖新配置（旧配置静默回滚）；扫描中被停用则不再排下次运行，
+    但 last_* 结果照常留痕（与 enabled=False 保留展示的语义一致）。
+    """
     import datetime as _dt
     cfg = dict(cfg)
     cfg['last_run_at'] = started_at_iso
@@ -885,12 +917,18 @@ def _record_sync_result(cfg, started_at_iso, status, errors, exit_code=None):
     cfg['last_trigger'] = 'scheduled'
     if exit_code is not None:
         cfg['last_exit_code'] = exit_code
-    if str(status).startswith('postponed'):
-        delay = _dt.timedelta(minutes=SCHED_POSTPONE_MINUTES)
-    else:
-        delay = _dt.timedelta(minutes=_cfg_interval(cfg))
-    cfg['next_run_at'] = _iso(_dt.datetime.now() + delay)
-    _save_sync_cfg(cfg)
+    with SCHED_CFG_LOCK:
+        fresh = _load_sync_cfg()
+        for k in ('enabled', 'interval_minutes', 'method', 'installed_at'):
+            if fresh.get(k) is not None:
+                cfg[k] = fresh[k]
+        enabled = bool(cfg.get('enabled'))
+        if str(status).startswith('postponed'):
+            delay = _dt.timedelta(minutes=SCHED_POSTPONE_MINUTES)
+        else:
+            delay = _dt.timedelta(minutes=_cfg_interval(cfg))
+        cfg['next_run_at'] = _iso(_dt.datetime.now() + delay) if enabled else None
+        _save_sync_cfg(cfg)
     slog('auto-sync %s：%s（下次 %s）' % (
         status, (cfg['last_errors'][0] if cfg['last_errors'] else 'ok'),
         cfg['next_run_at']))
