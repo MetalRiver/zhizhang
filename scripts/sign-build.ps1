@@ -46,7 +46,19 @@ $confPath  = Join-Path $repo 'src-tauri\tauri.conf.json'
 $pkgPath   = Join-Path $repo 'package.json'
 $tauriCli  = Join-Path $repo 'node_modules\@tauri-apps\cli\tauri.js'
 $nsisDir   = Join-Path $repo 'src-tauri\target\release\bundle\nsis'
-$appVer    = '1.0.0'
+
+# 版本唯一事实源 = src-tauri\tauri.conf.json（tauri build 产物版本即由它决定）；
+# 与 package.json 交叉核对，缺失/不一致即停——防止版本口径漂移进入签名探针与 .sig 版本绑定。
+$appVer   = $null
+$confVer  = $null
+$pkgVer   = $null
+try { $confVer = (Get-Content -LiteralPath $confPath -Raw | ConvertFrom-Json).version } catch { }
+try { $pkgVer  = (Get-Content -LiteralPath $pkgPath -Raw | ConvertFrom-Json).version } catch { }
+if ([string]::IsNullOrWhiteSpace($confVer) -or ($confVer -ne $pkgVer)) {
+  Write-Host ("STOP: 版本口径不一致或缺失——tauri.conf.json='{0}' package.json='{1}'（先对齐五处版本口径再签名）" -f $confVer, $pkgVer)
+  exit 1
+}
+$appVer = $confVer
 
 function Clear-SigningEnv {
   Remove-Item Env:\TAURI_SIGNING_PRIVATE_KEY -ErrorAction SilentlyContinue
@@ -72,6 +84,7 @@ function Test-SigFile([string]$sigPath) {
 Write-Host '--- 启动前路径解析 ---'
 Write-Host ("  脚本目录 = {0}" -f $PSScriptRoot)
 Write-Host ("  repo     = {0}" -f $repo)
+Write-Host ("  appVer   = {0}（源 tauri.conf.json，与 package.json 交叉核对一致）" -f $appVer)
 
 $checks = @()
 $checks += , @('minisign 私钥', $keyPath,
